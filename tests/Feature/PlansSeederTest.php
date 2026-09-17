@@ -111,20 +111,27 @@ it('seeds the simplified pricing: round numbers, capped tiers, no overage', func
         ->and($pro->price_annual)->toBe(2499000)
         ->and($pro->overage_price)->toBeNull()
         ->and($pro->limits['messages_used'])->toBeNull()
-        ->and($pro->ai_budget_usd_cents)->toBe(2575)
-        ->and($pro->ai_usage_multiplier)->toBe(5)
-        ->and($firm->price)->toBe(699900)
-        ->and($firm->price_annual)->toBe(6999000)
+        // $15.00/mo at the budgeting FX rate: 3x Standard, sized so the
+        // frontier tier still clears a 50% margin.
+        ->and($pro->ai_budget_usd_cents)->toBe(1500)
+        ->and($pro->ai_usage_multiplier)->toBe(3)
+        ->and($firm->price)->toBe(799900)
+        ->and($firm->price_annual)->toBe(7999000)
         ->and($firm->annual_only)->toBeTrue()
         ->and($firm->overage_price)->toBeNull()
         // One team pool, not three seat wallets: the spend allowance is
         // shared across the organization's active members.
         ->and($firm->limits['messages_used'])->toBeNull()
-        ->and($firm->ai_budget_usd_cents)->toBe(10300)
-        ->and($firm->ai_usage_multiplier)->toBe(20)
+        // 10x Standard: at 20x the pooled allowance cost more than the price
+        // covered once payment fees were counted (`artisan costing:earnings`).
+        ->and($firm->ai_budget_usd_cents)->toBe(5150)
+        ->and($firm->ai_usage_multiplier)->toBe(10)
         ->and($firm->included_seats)->toBe(3)
         ->and($firm->seat_price)->toBe(199900)
         ->and($firm->features)->toContain(PlanFeatures::GUIDED_SETUP, PlanFeatures::TEAM_TRAINING)
+        ->and($standard->features)->toContain(PlanFeatures::CRM)
+        ->and($pro->features)->toContain(PlanFeatures::CRM)
+        ->and($firm->features)->toContain(PlanFeatures::CRM)
         // The single-seat tiers sell no seats at all, which is a different
         // statement from selling them for nothing.
         ->and($standard->included_seats)->toBe(1)
@@ -146,6 +153,30 @@ it('includes Google Drive and SharePoint add-ons on Firm', function () {
         ->toBe('Google Drive & Microsoft SharePoint add-ons')
         ->and(PlanFeatures::catalogue()[PlanFeatures::INTEGRATIONS]['description'])
         ->toContain('Google Drive', 'Microsoft SharePoint');
+});
+
+it('publishes CRM in the plan catalogue and every paid plan', function () {
+    Http::fake(['api.paymongo.com/*' => Http::response(['data' => []])]);
+    config(['paymongo.secret_key' => '']);
+
+    $this->seeder->run();
+
+    $this->getJson('/api/plans')
+        ->assertOk()
+        ->assertJsonPath('meta.features.crm.label', 'Client management (CRM)')
+        ->assertJsonPath('meta.features.crm.description', 'Track client profiles and move intake through configurable pipeline stages.')
+        ->assertJsonPath('data.0.features.4', PlanFeatures::CRM)
+        ->assertJsonPath('data.1.features.4', PlanFeatures::CRM)
+        ->assertJsonPath('data.2.features.4', PlanFeatures::CRM);
+
+    $this->getJson('/api/plans?include_trial=1')
+        ->assertOk()
+        ->assertJsonPath('data.0.slug', Plan::SLUG_TRIAL)
+        ->assertJsonPath('data.0.features', [
+            PlanFeatures::DRAFTING,
+            PlanFeatures::EXPORTS,
+            PlanFeatures::WEB_SEARCH,
+        ]);
 });
 
 it('seeds the free trial plan small and unsold', function () {
@@ -173,6 +204,7 @@ it('seeds the free trial plan small and unsold', function () {
         ->and($trial->paymongo_plan_id_annual)->toBeNull()
         ->and($trial->features)->not->toContain(PlanFeatures::PDF_DOCUMENTS)
         ->and($standard->features)->toContain(PlanFeatures::PDF_DOCUMENTS);
+    expect($trial->features)->not->toContain(PlanFeatures::CRM);
 });
 
 it('puts the former Business services on Firm', function () {

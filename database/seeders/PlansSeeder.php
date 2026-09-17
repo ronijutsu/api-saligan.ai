@@ -57,6 +57,7 @@ class PlansSeeder extends Seeder
             PlanFeatures::EXPORTS,
             PlanFeatures::PDF_DOCUMENTS,
             PlanFeatures::WEB_SEARCH,
+            PlanFeatures::CRM,
         ];
 
         $plans = [
@@ -105,6 +106,14 @@ class PlansSeeder extends Seeder
                 'overage_price' => null,
                 'ai_budget_usd_cents' => 515,
                 'ai_usage_multiplier' => 1,
+                // A pack buys roughly a quarter of the included allowance for a
+                // little over a quarter of the price: ~1.24x the plan's own ₱/USD
+                // rate, so topping up never beats moving up a tier (ADR-010).
+                // Provisional — owner sign-off pending.
+                'allow_top_ups' => true,
+                'topup_price' => 30000,
+                'topup_usd_cents' => 125,
+                'topup_max_per_window' => 8,
                 'included_seats' => 1,
                 'seat_price' => null,
                 'sort_order' => 1,
@@ -120,11 +129,22 @@ class PlansSeeder extends Seeder
                 // the turn with an upgrade prompt instead of billing per
                 // message, because per-message billing was accrued as displayed
                 // debt with no collection path behind it.
-                // 5x Standard's AI usage allowance: $25.75/mo at the
-                // budgeting FX rate.
+                // 3x Standard's AI usage allowance: $15.00/mo at the
+                // budgeting FX rate. The frontier model costs roughly twice
+                // the base one per turn, so 3x Standard's dollars buys about
+                // 1.5x its messages — and holds this tier at a 50%+ margin
+                // where 5x left it at 21%.
                 'overage_price' => null,
-                'ai_budget_usd_cents' => 2575,
-                'ai_usage_multiplier' => 5,
+                'ai_budget_usd_cents' => 1500,
+                'ai_usage_multiplier' => 3,
+                'allow_top_ups' => true,
+                // Re-derived with the allowance (ADR-010): ~1.24x the plan's
+                // own ₱/USD rate, so topping up stays worse value than the
+                // plan it belongs to. Price is unchanged; the dollar grant
+                // moves with the allowance.
+                'topup_price' => 75000,
+                'topup_usd_cents' => 363,
+                'topup_max_per_window' => 8,
                 'included_seats' => 1,
                 'seat_price' => null,
                 'sort_order' => 2,
@@ -140,18 +160,31 @@ class PlansSeeder extends Seeder
             [
                 'slug' => Plan::SLUG_FIRM,
                 'name' => 'Firm',
-                'price' => 699900,
-                'price_annual' => 6999000,
+                'price' => 799900,
+                'price_annual' => 7999000,
                 'annual_only' => true,
                 'overage_price' => null,
                 // 20x Standard's AI usage allowance: $103/mo shared across
                 // the workspace at the budgeting FX rate — one team pool,
-                // not three seat wallets. Three people for ₱6,999, against
+                // not three seat wallets. Three people for ₱7,999, against
                 // ₱7,497 for three separate
                 // Pro accounts that cannot share a matter between them. The
                 // fourth seat onwards costs less than a Pro subscription.
-                'ai_budget_usd_cents' => 10300,
-                'ai_usage_multiplier' => 20,
+                // 10x Standard, not 20x: at 20x the shared pool cost more than
+                // the price covered once payment fees were counted, so a Firm team
+                // that used its whole allowance put the plan underwater. See
+                // `artisan costing:earnings`.
+                'ai_budget_usd_cents' => 5150,
+                'ai_usage_multiplier' => 10,
+                'allow_top_ups' => true,
+                // Repriced with the allowance (₱2,100 → ₱4,200) and again when
+                // the price rose to ₱7,999 (₱4,200 → ₱4,800). At a fixed $25
+                // grant the pack must track the plan's own ₱/USD rate to keep
+                // its ~1.24x premium; had it stayed at ₱4,200 the premium
+                // eroded to ~1.08x once the plan price rose (ADR-010).
+                'topup_price' => 480000,
+                'topup_usd_cents' => 2500,
+                'topup_max_per_window' => 8,
                 'included_seats' => 3,
                 'seat_price' => 199900,
                 'sort_order' => 3,

@@ -41,6 +41,9 @@ it('retrieves legal context and the users own document chunks by similarity', fu
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The Python provider answers the same query-vector request on its own
+        // route; faking both keeps the test honest whichever engine serves it.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $result = app(RetrievalService::class)->retrieve($this->user, 'agrarian reform');
@@ -63,6 +66,9 @@ it('filters chunks below the minimum similarity threshold', function () {
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The Python provider answers the same query-vector request on its own
+        // route; faking both keeps the test honest whichever engine serves it.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $result = app(RetrievalService::class)->retrieve($this->user, 'agrarian reform');
@@ -147,6 +153,9 @@ it('scopes document retrieval to the documents attached to a case', function () 
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The Python provider answers the same query-vector request on its own
+        // route; faking both keeps the test honest whichever engine serves it.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $result = app(RetrievalService::class)->retrieve($this->user, 'agrarian reform', $case);
@@ -174,6 +183,9 @@ it('builds a context block with labeled sources', function () {
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The Python provider answers the same query-vector request on its own
+        // route; faking both keeps the test honest whichever engine serves it.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $tokens = CitationTokens::assign([(string) $page->id, (string) $document->id]);
@@ -237,6 +249,9 @@ it('labels each distinct source exactly once when it has multiple chunks', funct
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The Python provider answers the same query-vector request on its own
+        // route; faking both keeps the test honest whichever engine serves it.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $tokens = CitationTokens::assign([(string) $page->id, (string) $document->id]);

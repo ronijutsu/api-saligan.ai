@@ -3,8 +3,8 @@
 namespace App\Services\Documents;
 
 use App\Models\DocumentClassificationRequest;
-use App\Services\Ai\BatchClient;
-use App\Services\Ai\BatchClientFactory;
+use App\Models\Label;
+use App\Services\Ai\PythonAiClient;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -18,16 +18,15 @@ use Throwable;
  * for a worthwhile batch to accumulate, while collecting only needs to keep up
  * with batches ending.
  *
- * Which provider answers is a deployment choice, and this class does not know:
- * BatchClient normalizes the envelope, the status vocabulary and the result
- * shape, so everything here is about classification rather than about
- * Anthropic or Gemini.
+ * The batch lifecycle (which provider, submission, polling, result parsing)
+ * lives in ai-provider; this class is the thin client for its three routes and
+ * keeps the queue, which is product state (ADR-011).
  */
 class DocumentClassificationBatcher
 {
     public function __construct(
         private readonly DocumentClassifier $classifier,
-        private readonly BatchClientFactory $clients,
+        private readonly PythonAiClient $python,
     ) {
         //
     }
@@ -38,10 +37,7 @@ class DocumentClassificationBatcher
      */
     public function submit(?int $limit = null): ?string
     {
-        $client = $this->client();
-        $model = $this->classifier->batchModel();
-
-        if ($client === null || $model === null) {
+        if (! $this->classifier->batches()) {
             return null;
         }
 
@@ -65,12 +61,9 @@ class DocumentClassificationBatcher
         }
 
         try {
-            $batchId = $client->create(
-                $requests,
-                $model,
-                (int) config('saligan.documents.classification.batch.max_tokens', 1024),
-                'document-classification',
-            );
+            $response = $this->python->call('/documents/classify/batches', [
+                'requests' => $requests,
+            ]);
         } catch (Throwable $exception) {
             // Left pending on purpose: a failed submission is a transport
             // problem, and the next sweep should try these documents again
@@ -79,6 +72,17 @@ class DocumentClassificationBatcher
                 'requests' => count($requests),
                 'exception' => $exception->getMessage(),
                 'response' => $this->responseBody($exception),
+            ]);
+
+            return null;
+        }
+
+        $batchId = (string) ($response['batch_id'] ?? '');
+
+        if ($batchId === '') {
+            Log::warning('Document classification batch submission returned no batch id.', [
+                'requests' => count($requests),
+                'response' => $response,
             ]);
 
             return null;
@@ -103,6 +107,10 @@ class DocumentClassificationBatcher
      */
     public function collect(): int
     {
+        if (! $this->classifier->batches()) {
+            return 0;
+        }
+
         $batchIds = DocumentClassificationRequest::query()
             ->submitted()
             ->whereNotNull('batch_id')
@@ -119,26 +127,11 @@ class DocumentClassificationBatcher
     }
 
     /**
-     * The batch client for the provider classification is configured to run
-     * on, or null when this deployment should not be batching at all.
-     */
-    protected function client(): ?BatchClient
-    {
-        if (! $this->classifier->batches()) {
-            return null;
-        }
-
-        $client = $this->clients->for($this->classifier->batchProvider());
-
-        return $client?->isConfigured() ? $client : null;
-    }
-
-    /**
      * Build one batch request per queued document, failing the ones that can
      * no longer be classified.
      *
      * @param  Collection<int, DocumentClassificationRequest>  $queued
-     * @return array{0: array<int, array{custom_id: string, system: string, prompt: string, schema: array<string, mixed>}>, 1: array<int, int>}
+     * @return array{0: array<int, array{custom_id: string, filename: string, title: string, text: string, vocabulary: array<int, array{slug: string, name: string, description: ?string}>}>, 1: array<int, int>}
      */
     protected function buildRequests(Collection $queued): array
     {
@@ -162,13 +155,16 @@ class DocumentClassificationBatcher
                 continue;
             }
 
-            $agent = $this->classifier->agentFor($vocabulary);
-
             $requests[] = [
                 'custom_id' => $request->customId(),
-                'system' => $agent->instructions(),
-                'prompt' => (string) $request->prompt,
-                'schema' => $this->schemaFor($vocabulary->pluck('slug')->all()),
+                'filename' => (string) $document->original_filename,
+                'title' => (string) $document->title,
+                'text' => (string) $request->excerpt,
+                'vocabulary' => $vocabulary->map(fn (Label $label): array => [
+                    'slug' => $label->slug,
+                    'name' => $label->name,
+                    'description' => $label->description,
+                ])->values()->all(),
             ];
 
             $submitting[] = $request->id;
@@ -178,56 +174,21 @@ class DocumentClassificationBatcher
     }
 
     /**
-     * The output shape, as structured outputs express it.
-     *
-     * Constraining `slug` to this user's vocabulary means the model cannot
-     * name a category that does not exist for them. Numeric bounds are left
-     * off `confidence` deliberately — structured outputs do not support
-     * `minimum`/`maximum`, and the confidence floor is applied when the answer
-     * is read anyway.
-     *
-     * @param  array<int, string>  $slugs
-     * @return array<string, mixed>
-     */
-    protected function schemaFor(array $slugs): array
-    {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'categories' => [
-                    'type' => 'array',
-                    'description' => 'The categories this document belongs to, most confident first. Empty when the document cannot be placed.',
-                    'items' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'slug' => ['type' => 'string', 'enum' => $slugs],
-                            'confidence' => ['type' => 'number'],
-                        ],
-                        'required' => ['slug', 'confidence'],
-                        'additionalProperties' => false,
-                    ],
-                ],
-            ],
-            'required' => ['categories'],
-            'additionalProperties' => false,
-        ];
-    }
-
-    /**
      * Poll one batch. A batch still running is left alone; an ended one is
      * read to completion and every request in it closed out.
      */
     protected function collectBatch(string $batchId): int
     {
-        $client = $this->client();
-
-        if ($client === null) {
-            return 0;
-        }
-
         try {
-            $status = $client->status($batchId);
+            $status = $this->python->get("/documents/classify/batches/{$batchId}");
         } catch (Throwable $exception) {
+            // A batch the provider no longer knows about — both providers
+            // expire results eventually — is a dead letter: the documents
+            // behind it will never be answered.
+            if ($exception instanceof RequestException && $exception->response->status() === 404) {
+                return $this->failRemaining($batchId, 'The batch is no longer available.');
+            }
+
             Log::warning('Document classification batch could not be polled.', [
                 'batch_id' => $batchId,
                 'exception' => $exception->getMessage(),
@@ -237,19 +198,20 @@ class DocumentClassificationBatcher
             return 0;
         }
 
-        // Both providers expire results — Anthropic after 29 days, Gemini after
-        // six weeks. Past that the batch is gone and the documents behind it
-        // will never be answered.
-        if ($status === null) {
-            return $this->failRemaining($batchId, 'The batch is no longer available.');
+        $state = (string) ($status['status'] ?? '');
+
+        // A failed batch is terminal but has no results to read: every request
+        // behind it is closed out here so none sits submitted forever.
+        if ($state === 'failed') {
+            return $this->failRemaining($batchId, 'The batch failed before this document was classified.');
         }
 
-        if ($status !== BatchClient::STATUS_ENDED) {
+        if ($state !== 'ended') {
             return 0;
         }
 
         try {
-            $results = $client->results($batchId);
+            $response = $this->python->get("/documents/classify/batches/{$batchId}/results");
         } catch (Throwable $exception) {
             Log::warning('Document classification batch results could not be read.', [
                 'batch_id' => $batchId,
@@ -269,7 +231,11 @@ class DocumentClassificationBatcher
 
         $closed = 0;
 
-        foreach ($results as $result) {
+        foreach ($response['results'] ?? [] as $result) {
+            if (! is_array($result)) {
+                continue;
+            }
+
             $customId = (string) ($result['custom_id'] ?? '');
             $request = $requests->get($customId);
 
@@ -296,12 +262,12 @@ class DocumentClassificationBatcher
      */
     protected function applyResult(DocumentClassificationRequest $request, array $result): void
     {
-        $status = (string) ($result['status'] ?? BatchClient::RESULT_ERRORED);
+        $status = (string) ($result['status'] ?? 'errored');
 
-        if ($status !== BatchClient::RESULT_SUCCEEDED) {
+        if ($status !== 'succeeded') {
             $request->markFailed(match ($status) {
-                BatchClient::RESULT_EXPIRED => 'The batch expired before this document was classified.',
-                BatchClient::RESULT_CANCELLED => 'The batch was cancelled.',
+                'expired' => 'The batch expired before this document was classified.',
+                'cancelled' => 'The batch was cancelled.',
                 default => 'The model returned an error for this document.',
             });
 
@@ -317,10 +283,7 @@ class DocumentClassificationBatcher
         }
 
         try {
-            $this->classifier->apply(
-                $document,
-                $this->classifier->readJsonCandidates((string) ($result['text'] ?? '')),
-            );
+            $this->classifier->apply($document, $this->categoriesFrom($result));
 
             $request->markSucceeded();
         } catch (Throwable $exception) {
@@ -331,6 +294,36 @@ class DocumentClassificationBatcher
 
             $request->markFailed('The answer could not be applied.');
         }
+    }
+
+    /**
+     * The categories out of a succeeded result, as `apply()` reads them.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array<int, array{slug: string, confidence: float}>
+     */
+    protected function categoriesFrom(array $result): array
+    {
+        $categories = $result['categories'] ?? [];
+
+        if (! is_array($categories)) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($categories as $category) {
+            if (! is_array($category) || ! isset($category['slug'])) {
+                continue;
+            }
+
+            $candidates[] = [
+                'slug' => (string) $category['slug'],
+                'confidence' => (float) ($category['confidence'] ?? 0.0),
+            ];
+        }
+
+        return $candidates;
     }
 
     /**

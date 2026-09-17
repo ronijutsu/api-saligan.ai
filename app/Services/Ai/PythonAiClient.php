@@ -18,6 +18,15 @@ class PythonAiClient
             ->json();
     }
 
+    /** @return array<string, mixed> */
+    public function get(string $path): array
+    {
+        return $this->request()
+            ->get($path)
+            ->throw()
+            ->json();
+    }
+
     /**
      * @param  array<int, string>  $texts
      * @return array<int, array<int, float>>

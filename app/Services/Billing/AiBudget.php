@@ -79,7 +79,12 @@ final class AiBudget
             $estimate = $estimateUsd ?? AiCosting::estimateFor($operation);
             $open = self::openReservedUsd($window);
 
-            if ($window->budget_usd > 0 && $window->used_usd + $open + $estimate > $window->budget_usd) {
+            // The ceiling is the plan's allowance plus anything bought for this
+            // window (ADR-010). Top-ups expire with the window they were paid
+            // for, so this stays a single comparison against one number.
+            $budget = $window->effectiveBudgetUsd();
+
+            if ($budget > 0 && $window->used_usd + $open + $estimate > $budget) {
                 // The message was already counted above; hand it back before
                 // refusing, or an exhausted budget would also eat the counts.
                 self::legacyRefund($user, $operation);
@@ -313,13 +318,19 @@ final class AiBudget
         // the next turn is concerned.
         $used = (float) $window->used_usd + self::openReservedUsd($window);
 
-        $percent = $window->budget_usd > 0
-            ? min(999.0, round($used / $window->budget_usd * 100, 1))
+        // The meter reads the effective allowance, not the plan's alone: a
+        // customer who bought extra usage must see the meter they are actually
+        // being gated on, or the number and the refusal disagree (ADR-010).
+        $budget = $window->effectiveBudgetUsd();
+
+        $percent = $budget > 0
+            ? min(999.0, round($used / $budget * 100, 1))
             : 0.0;
 
         return [
             'used_usd' => round($used, 4),
-            'budget_usd' => round((float) $window->budget_usd, 4),
+            'budget_usd' => round($budget, 4),
+            'topup_usd' => round((float) $window->topup_usd, 4),
             'percent' => $percent,
             'warning' => $window->isWarning(),
             'exhausted' => $window->isExhausted(),
@@ -522,17 +533,30 @@ final class AiBudget
 
         // Percent counts open holds too: the refusal is about spend plus what
         // is already in flight, and the meter must agree with the refusal.
-        $percent = $window->budget_usd > 0
-            ? min(999.0, round(((float) $window->used_usd + self::openReservedUsd($window)) / $window->budget_usd * 100, 1))
+        $budget = $window->effectiveBudgetUsd();
+
+        $percent = $budget > 0
+            ? min(999.0, round(((float) $window->used_usd + self::openReservedUsd($window)) / $budget * 100, 1))
             : 100.0;
 
+        // An account that may buy extra usage gets an actionable refusal rather
+        // than the dead end of "upgrade or wait" — it is already on the tier it
+        // would be told to upgrade to (ADR-010).
+        $canTopUp = $subscription->topup_enabled
+            && $subscription->plan?->canBuyTopUps() === true;
+
         return UpgradeResponse::make(
-            $reset
-                ? "You've used this month's AI allowance. It resets on {$reset} — upgrade for a larger allowance, or continue then."
-                : "You've used this month's AI allowance. Upgrade for a larger allowance, or continue when it resets.",
+            $canTopUp
+                ? ($reset
+                    ? "You've used this month's AI allowance. Add extra usage to keep working, or wait for the {$reset} reset."
+                    : "You've used this month's AI allowance. Add extra usage to keep working.")
+                : ($reset
+                    ? "You've used this month's AI allowance. It resets on {$reset} — upgrade for a larger allowance, or continue then."
+                    : "You've used this month's AI allowance. Upgrade for a larger allowance, or continue when it resets."),
             [
                 'usage_percent' => $percent,
                 'usage_reset_at' => $window->window_end?->toIso8601String(),
+                'can_top_up' => $canTopUp,
             ],
         );
     }

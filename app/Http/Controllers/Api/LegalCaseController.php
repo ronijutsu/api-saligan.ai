@@ -164,7 +164,7 @@ class LegalCaseController extends Controller
             'messages',
             $activeConversation ? $activeConversation->messages()->orderBy('created_at')->get() : new Collection,
         );
-        $case->load(['defaultTemplate', 'tasks', 'owner', 'assignees']);
+        $case->load(['defaultTemplate', 'tasks', 'owner', 'assignees', 'caseClients.client']);
         $this->digests->queueIfMissing($case);
 
         return new LegalCaseResource($case);

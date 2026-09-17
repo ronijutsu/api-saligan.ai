@@ -115,8 +115,8 @@ class PlanFactory extends Factory
             'price' => 350000,
             'price_annual' => 3500000,
             'overage_price' => null,
-            'ai_budget_usd_cents' => 2575,
-            'ai_usage_multiplier' => 5,
+            'ai_budget_usd_cents' => 1500,
+            'ai_usage_multiplier' => 3,
             'included_seats' => 1,
             'seat_price' => null,
             'annual_only' => false,
@@ -147,11 +147,11 @@ class PlanFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'slug' => Plan::SLUG_FIRM,
             'name' => 'Firm',
-            'price' => 699900,
-            'price_annual' => 6999000,
+            'price' => 799900,
+            'price_annual' => 7999000,
             'overage_price' => null,
-            'ai_budget_usd_cents' => 10300,
-            'ai_usage_multiplier' => 20,
+            'ai_budget_usd_cents' => 5150,
+            'ai_usage_multiplier' => 10,
             'included_seats' => 3,
             'seat_price' => 199900,
             'annual_only' => true,
@@ -175,6 +175,20 @@ class PlanFactory extends Factory
                 PlanFeatures::GUIDED_SETUP,
                 PlanFeatures::TEAM_TRAINING,
             ],
+        ]);
+    }
+
+    /**
+     * A tier that may sell prepaid extra AI usage (ADR-010). Prices are in the
+     * same minor units as `price`; the USD granted is internal.
+     */
+    public function withTopUps(int $price = 30000, int $usdCents = 125, ?int $maxPerWindow = 8): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'allow_top_ups' => true,
+            'topup_price' => $price,
+            'topup_usd_cents' => $usdCents,
+            'topup_max_per_window' => $maxPerWindow,
         ]);
     }
 }

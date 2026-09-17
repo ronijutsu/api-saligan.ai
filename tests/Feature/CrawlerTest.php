@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Storage;
 
 function fakeEmbedResponse(): array
 {
-    return ['embeddings' => [array_fill(0, 4000, 0.25)]];
+    return ['embeddings' => [array_fill(0, 768, 0.25)], 'dimensions' => 768];
 }
 
 it('marks a page as failed when blocked by robots.txt', function () {
@@ -55,7 +55,7 @@ it('parses a lawphil page, stores raw html, and indexes chunks', function () {
 
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
-        '*/api/embed' => Http::response(fakeEmbedResponse(), 200),
+        '*/embeddings' => Http::response(fakeEmbedResponse(), 200),
         '*' => Http::response($html, 200),
     ]);
 
@@ -86,7 +86,7 @@ it('skips re-indexing when the content hash is unchanged', function () {
 
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
-        '*/api/embed' => Http::response(fakeEmbedResponse(), 200),
+        '*/embeddings' => Http::response(fakeEmbedResponse(), 200),
         '*' => Http::response($html, 200),
     ]);
 
@@ -138,7 +138,7 @@ it('parses a scoped PDF, stores it as pdf, and indexes its chunks', function () 
 
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
-        '*/api/embed' => Http::response(fakeEmbedResponse(), 200),
+        '*/embeddings' => Http::response(fakeEmbedResponse(), 200),
         '*/well.pdf' => Http::response($pdf, 200, ['Content-Type' => 'application/pdf']),
     ]);
 

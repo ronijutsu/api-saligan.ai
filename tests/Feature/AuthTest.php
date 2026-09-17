@@ -10,6 +10,14 @@ it('requires a bearer token for the user endpoint', function () {
     $this->getJson('/api/user')->assertStatus(401);
 });
 
+it('answers a browser request without a token with 401, not a missing login route', function () {
+    // A browser sends Accept: text/html, so the guest path is taken rather than
+    // the JSON one. This app has no login page, and the default guest redirect
+    // pointed at a `login` route that does not exist — which surfaced as a 500
+    // RouteNotFoundException instead of the 401 the caller should have seen.
+    $this->get('/api/user')->assertStatus(401);
+});
+
 it('rejects an invalid or malformed bearer token', function () {
     $this->withHeader('Authorization', 'Bearer not-a-valid-token')
         ->getJson('/api/user')

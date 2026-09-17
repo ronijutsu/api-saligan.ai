@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 #[Fillable([
     'crawled_page_id',
-    'prompt',
+    'excerpt',
     'status',
     'batch_id',
     'error',

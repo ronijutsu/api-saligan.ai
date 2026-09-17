@@ -4,30 +4,30 @@ namespace App\Services\Crawler;
 
 use App\Models\CrawledPage;
 use App\Models\LegalDigestRequest;
-use App\Services\Ai\BatchClient;
-use App\Services\Ai\BatchClientFactory;
+use App\Services\Ai\PythonAiClient;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Drives batched digesting: gathers the crawled authorities waiting on a
- * digest into one batch, and writes the digests when the answers land.
+ * Drives batched digesting: gathers the crawled authorities waiting on a digest
+ * into one batch, and writes the digests when the answers land.
  *
- * Only the work nobody is watching goes through here — the nightly crawl and
- * the bulk backfill, which between them digest hundreds of pages at a time
- * that no reader has asked for yet. A digest generated because someone opened
- * a source stays inline: they are waiting on it, and a batch takes up to a day.
+ * Only the work nobody is watching goes through here — the nightly crawl and the
+ * bulk backfill, which between them digest hundreds of pages at a time that no
+ * reader has asked for yet. A digest generated because someone opened a source
+ * stays inline: they are waiting on it, and a batch takes up to a day.
  *
- * The two halves run on their own schedules — submitting is cheap and can wait
- * for a worthwhile batch to accumulate, while collecting only needs to keep up
- * with batches ending.
+ * The batch lifecycle (which provider, submission, polling, result parsing)
+ * lives in ai-provider; this class is the thin client for its three routes and
+ * keeps the queue, which is product state (ADR-011, generalised to digests).
  */
 class LegalDigestBatcher
 {
     public function __construct(
         private readonly LegalDigestService $digests,
-        private readonly BatchClientFactory $clients,
+        private readonly PythonAiClient $python,
     ) {
         //
     }
@@ -45,7 +45,7 @@ class LegalDigestBatcher
         return LegalDigestRequest::updateOrCreate(
             ['crawled_page_id' => $page->id],
             [
-                'prompt' => $this->digests->promptFor($text, $page->title),
+                'excerpt' => $this->digests->excerpt($text),
                 'status' => LegalDigestRequest::STATUS_PENDING,
                 'batch_id' => null,
                 'error' => null,
@@ -61,10 +61,7 @@ class LegalDigestBatcher
      */
     public function submit(?int $limit = null): ?string
     {
-        $client = $this->client();
-        $model = $this->digests->batchModel();
-
-        if ($client === null || $model === null) {
+        if (! $this->digests->batches()) {
             return null;
         }
 
@@ -88,12 +85,9 @@ class LegalDigestBatcher
         }
 
         try {
-            $batchId = $client->create(
-                $requests,
-                $model,
-                (int) config('saligan.crawler.digest.batch.max_tokens', 2048),
-                'legal-digest',
-            );
+            $response = $this->python->call('/crawler/digest/batches', [
+                'requests' => $requests,
+            ]);
         } catch (Throwable $exception) {
             // Left pending on purpose: a failed submission is a transport
             // problem, and the next sweep should try these pages again rather
@@ -101,6 +95,17 @@ class LegalDigestBatcher
             Log::warning('Legal digest batch could not be submitted.', [
                 'requests' => count($requests),
                 'exception' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $batchId = (string) ($response['batch_id'] ?? '');
+
+        if ($batchId === '') {
+            Log::warning('Legal digest batch submission returned no batch id.', [
+                'requests' => count($requests),
+                'response' => $response,
             ]);
 
             return null;
@@ -125,6 +130,10 @@ class LegalDigestBatcher
      */
     public function collect(): int
     {
+        if (! $this->digests->batches()) {
+            return 0;
+        }
+
         $batchIds = LegalDigestRequest::query()
             ->submitted()
             ->whereNotNull('batch_id')
@@ -141,36 +150,21 @@ class LegalDigestBatcher
     }
 
     /**
-     * The batch client for the provider digests are configured to run on, or
-     * null when this deployment should not be batching them at all.
-     */
-    protected function client(): ?BatchClient
-    {
-        if (! $this->digests->batches()) {
-            return null;
-        }
-
-        $client = $this->clients->for($this->digests->batchProvider());
-
-        return $client?->isConfigured() ? $client : null;
-    }
-
-    /**
      * Build one batch request per queued page, failing the ones that can no
      * longer be digested.
      *
      * @param  Collection<int, LegalDigestRequest>  $queued
-     * @return array{0: array<int, array{custom_id: string, system: string, prompt: string, schema: null}>, 1: array<int, int>}
+     * @return array{0: array<int, array{custom_id: string, text: string, title: ?string, kind: string}>, 1: array<int, int>}
      */
     protected function buildRequests(Collection $queued): array
     {
-        $instructions = $this->digests->instructions();
-
         $requests = [];
         $submitting = [];
 
         foreach ($queued as $request) {
-            if ($request->page === null) {
+            $page = $request->page;
+
+            if ($page === null) {
                 $request->markFailed('The page no longer exists.');
 
                 continue;
@@ -178,11 +172,11 @@ class LegalDigestBatcher
 
             $requests[] = [
                 'custom_id' => $request->customId(),
-                'system' => $instructions,
-                'prompt' => (string) $request->prompt,
-                // A digest is prose, not data. Asking for JSON back would only
-                // wrap it in quotes and escapes for the reader to undo.
-                'schema' => null,
+                'text' => (string) $request->excerpt,
+                'title' => $page->title,
+                // Only the bulk producers batch, and they digest authorities;
+                // a case brief is written on demand, inline.
+                'kind' => 'authority',
             ];
 
             $submitting[] = $request->id;
@@ -192,20 +186,20 @@ class LegalDigestBatcher
     }
 
     /**
-     * Poll one batch. A batch still running is left alone; an ended one is
-     * read to completion and every request in it closed out.
+     * Poll one batch. A batch still running is left alone; an ended one is read
+     * to completion and every request in it closed out.
      */
     protected function collectBatch(string $batchId): int
     {
-        $client = $this->client();
-
-        if ($client === null) {
-            return 0;
-        }
-
         try {
-            $status = $client->status($batchId);
+            $status = $this->python->get("/crawler/digest/batches/{$batchId}");
         } catch (Throwable $exception) {
+            // A batch the provider no longer knows about is a dead letter: the
+            // pages behind it will never be answered.
+            if ($exception instanceof RequestException && $exception->response->status() === 404) {
+                return $this->failRemaining($batchId, 'The batch is no longer available.');
+            }
+
             Log::warning('Legal digest batch could not be polled.', [
                 'batch_id' => $batchId,
                 'exception' => $exception->getMessage(),
@@ -214,16 +208,20 @@ class LegalDigestBatcher
             return 0;
         }
 
-        if ($status === null) {
-            return $this->failRemaining($batchId, 'The batch is no longer available.');
+        $state = (string) ($status['status'] ?? '');
+
+        // A failed batch is terminal but has no results to read: close every
+        // request behind it out here so none sits submitted forever.
+        if ($state === 'failed') {
+            return $this->failRemaining($batchId, 'The batch failed before this page was digested.');
         }
 
-        if ($status !== BatchClient::STATUS_ENDED) {
+        if ($state !== 'ended') {
             return 0;
         }
 
         try {
-            $results = $client->results($batchId);
+            $response = $this->python->get("/crawler/digest/batches/{$batchId}/results");
         } catch (Throwable $exception) {
             Log::warning('Legal digest batch results could not be read.', [
                 'batch_id' => $batchId,
@@ -242,7 +240,11 @@ class LegalDigestBatcher
 
         $closed = 0;
 
-        foreach ($results as $result) {
+        foreach ($response['results'] ?? [] as $result) {
+            if (! is_array($result)) {
+                continue;
+            }
+
             $request = $requests->get((string) ($result['custom_id'] ?? ''));
 
             if ($request === null) {
@@ -268,12 +270,12 @@ class LegalDigestBatcher
      */
     protected function applyResult(LegalDigestRequest $request, array $result): void
     {
-        $status = (string) ($result['status'] ?? BatchClient::RESULT_ERRORED);
+        $status = (string) ($result['status'] ?? 'errored');
 
-        if ($status !== BatchClient::RESULT_SUCCEEDED) {
+        if ($status !== 'succeeded') {
             $request->markFailed(match ($status) {
-                BatchClient::RESULT_EXPIRED => 'The batch expired before this page was digested.',
-                BatchClient::RESULT_CANCELLED => 'The batch was cancelled.',
+                'expired' => 'The batch expired before this page was digested.',
+                'cancelled' => 'The batch was cancelled.',
                 default => 'The model returned an error for this page.',
             });
 
@@ -288,7 +290,7 @@ class LegalDigestBatcher
             return;
         }
 
-        $digest = $this->digests->read((string) ($result['text'] ?? ''));
+        $digest = $this->digests->read((string) ($result['digest'] ?? ''));
 
         // NO_DIGEST is a real answer: the model read an index or an error page
         // rather than an authority. The request is done, and the page keeps no
@@ -308,8 +310,8 @@ class LegalDigestBatcher
     }
 
     /**
-     * Close out every request still waiting on a batch that will not answer
-     * it, returning how many there were.
+     * Close out every request still waiting on a batch that will not answer it,
+     * returning how many there were.
      */
     protected function failRemaining(string $batchId, string $reason): int
     {

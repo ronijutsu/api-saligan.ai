@@ -2,15 +2,11 @@
 
 namespace App\Services\TextRewrite;
 
-use App\Ai\TextRewriteAgent;
-use App\Enums\ChatProvider;
 use App\Models\Conversation;
 use App\Services\Ai\PythonAiClient;
 use App\Services\MatterMemory\MatterMemoryService;
 use App\Support\CaseContextBlock;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Laravel\Ai\Enums\Lab;
 
 /**
  * Rewrites a selected passage of a letter through the AI agent and returns
@@ -26,8 +22,8 @@ class TextRewriteService
 
     /**
      * Provider-reported token counts for the last successful rewrite, in the
-     * ledger's actuals shape — or null when the engine did not report any
-     * (the Laravel path) and the caller must settle the estimate instead.
+     * ledger's actuals shape — or null when the provider reported none, in
+     * which case the caller settles the estimate instead.
      *
      * @var array<string, mixed>|null
      */
@@ -48,60 +44,23 @@ class TextRewriteService
     {
         $this->lastUsage = null;
 
-        if (config('saligan.ai_provider.batch_engine') === 'python') {
-            for ($attempt = 1; $attempt <= 3; $attempt++) {
-                $response = $this->python->call('/agents/rewrite', [
-                    'text' => $text,
-                    'instruction' => $instruction,
-                    'context' => $this->contextFor($conversation),
-                ]);
-                $rewritten = $this->extractText((string) ($response['text'] ?? ''));
-
-                // Retries share the caller's single reservation: only the
-                // successful attempt's usage settles, so empty replies never
-                // multiply the charge.
-                if ($rewritten !== '') {
-                    $this->lastUsage = $this->reportedUsage($response['usage'] ?? null, $attempt);
-
-                    return $rewritten;
-                }
-            }
-
-            return null;
-        }
-
-        [$provider, $model] = $this->resolveProvider();
-
-        $agent = new TextRewriteAgent(
-            text: $text,
-            instruction: $instruction,
-            context: $this->contextFor($conversation),
-        );
-
-        $raw = '';
-
         for ($attempt = 1; $attempt <= 3; $attempt++) {
-            if ($attempt > 1) {
-                Log::warning('Text rewrite returned an empty reply; retrying.', [
-                    'provider' => $provider instanceof Lab ? $provider->value : (string) $provider,
-                    'model' => $model,
-                    'attempt' => $attempt,
-                ]);
-            }
+            $response = $this->python->call('/agents/rewrite', [
+                'text' => $text,
+                'instruction' => $instruction,
+                'context' => $this->contextFor($conversation),
+            ]);
+            $rewritten = $this->extractText((string) ($response['text'] ?? ''));
 
-            $raw = (string) $agent->prompt($text, [], $provider, $model)->text;
-            $rewritten = $this->extractText($raw);
-
+            // Retries share the caller's single reservation: only the
+            // successful attempt's usage settles, so empty replies never
+            // multiply the charge.
             if ($rewritten !== '') {
+                $this->lastUsage = $this->reportedUsage($response['usage'] ?? null, $attempt);
+
                 return $rewritten;
             }
         }
-
-        Log::warning('Text rewrite gave up after three empty replies.', [
-            'provider' => $provider instanceof Lab ? $provider->value : (string) $provider,
-            'model' => $model,
-            'last_reply' => Str::limit($raw, 200),
-        ]);
 
         return null;
     }
@@ -239,45 +198,5 @@ class TextRewriteService
         }
 
         return $trimmed;
-    }
-
-    /**
-     * The provider and model the rewrite runs on, resolved the same way the
-     * letter-draft and chat paths resolve them: the configured provider when
-     * its key is present, otherwise a local Ollama model.
-     *
-     * @return array{0: Lab|string, 1: string}
-     */
-    protected function resolveProvider(): array
-    {
-        return match (ChatProvider::fromConfig()) {
-            ChatProvider::Anthropic => filled(config('ai.providers.anthropic.key'))
-                ? [Lab::Anthropic, (string) config('saligan.chat.anthropic_model')]
-                : $this->ollamaFallback('anthropic'),
-            ChatProvider::Gemini => filled(config('ai.providers.gemini.key'))
-                ? [Lab::Gemini, (string) config('saligan.chat.gemini_model')]
-                : $this->ollamaFallback('gemini'),
-            ChatProvider::OpenAI => filled(config('ai.providers.openai.key'))
-                ? [Lab::OpenAI, (string) config('saligan.chat.openai_model')]
-                : $this->ollamaFallback('openai'),
-            ChatProvider::Meta => filled(config('ai.providers.meta.key'))
-                ? ['meta', (string) config('saligan.chat.meta_model')]
-                : $this->ollamaFallback('meta'),
-            default => $this->ollamaFallback('ollama'),
-        };
-    }
-
-    /**
-     * @return array{0: Lab|string, 1: string}
-     */
-    protected function ollamaFallback(string $configured): array
-    {
-        if ($configured !== 'ollama') {
-            Log::warning('Text rewrite fell back to Ollama: the configured provider has no API key.', [
-                'configured_provider' => $configured,
-            ]);
-        }
-
-        return [Lab::Ollama, (string) config('saligan.chat.ollama_model')];
     }
 }

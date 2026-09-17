@@ -34,6 +34,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'trial_code_id',
     'trial_warned_at',
     'cancelled_at',
+    'topup_enabled',
+    'topup_cap_pesos',
 ])]
 class Subscription extends Model
 {
@@ -79,6 +81,8 @@ class Subscription extends Model
             'paypal_last_event_at' => 'datetime',
             'seats_purchased' => 'integer',
             'price_per_seat' => 'integer',
+            'topup_enabled' => 'boolean',
+            'topup_cap_pesos' => 'integer',
         ];
     }
 

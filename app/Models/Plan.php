@@ -31,6 +31,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'contact_sales',
     'annual_only',
     'sort_order',
+    'allow_top_ups',
+    'topup_price',
+    'topup_usd_cents',
+    'topup_max_per_window',
 ])]
 class Plan extends Model
 {
@@ -84,7 +88,25 @@ class Plan extends Model
             'sort_order' => 'integer',
             'lemonsqueezy_variant_id' => 'integer',
             'lemonsqueezy_variant_id_annual' => 'integer',
+            'allow_top_ups' => 'boolean',
+            'topup_price' => 'integer',
+            'topup_usd_cents' => 'integer',
+            'topup_max_per_window' => 'integer',
         ];
+    }
+
+    /**
+     * Whether this tier may buy extra AI usage at all (ADR-010), and whether it
+     * is priced to do so. Both halves are required: a plan can be marked
+     * eligible before its pack price is agreed.
+     */
+    public function canBuyTopUps(): bool
+    {
+        return (bool) $this->allow_top_ups
+            && $this->topup_price !== null
+            && $this->topup_usd_cents !== null
+            && $this->topup_price > 0
+            && $this->topup_usd_cents > 0;
     }
 
     /**
@@ -210,6 +232,20 @@ class Plan extends Model
     public function aiUsageMultiplier(): ?int
     {
         return $this->ai_usage_multiplier;
+    }
+
+    /**
+     * The extra-usage pack as the marketing table reads it, or null when the
+     * tier cannot buy one (ADR-010). The price is the customer-facing fact; the
+     * USD it grants stays internal, like the budget it tops up.
+     */
+    public function topUpLabel(): ?string
+    {
+        if (! $this->canBuyTopUps()) {
+            return null;
+        }
+
+        return '₱'.number_format($this->topup_price / 100).' per pack';
     }
 
     /**

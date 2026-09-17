@@ -49,7 +49,7 @@ it('creates a Gemini context cache when streaming on the Gemini provider', funct
     config(['saligan.chat.provider' => 'gemini']);
 
     Http::fake([
-        '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
         'generativelanguage.googleapis.com/*' => Http::response([
             'name' => 'cachedContents/abc123',
         ]),
@@ -73,7 +73,7 @@ it('creates a Gemini context cache when streaming on the Gemini provider', funct
 
 it('does not create a context cache when streaming on Ollama', function () {
     Http::fake([
-        '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
         'generativelanguage.googleapis.com/*' => Http::response([
             'name' => 'cachedContents/abc123',
         ]),
@@ -97,7 +97,7 @@ it('persists the native engine and active prompt identity with the reply', funct
     ]);
 
     Http::fake([
-        '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     $conversation = Conversation::factory()->for($this->user)->create();

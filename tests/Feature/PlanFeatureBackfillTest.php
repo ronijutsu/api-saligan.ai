@@ -23,6 +23,34 @@ it('backfills PDF access onto every paid plan', function (): void {
     }
 });
 
+it('backfills CRM access onto every paid plan and leaves the trial untouched', function (): void {
+    foreach ([Plan::SLUG_TRIAL, Plan::SLUG_STANDARD, Plan::SLUG_PRO, Plan::SLUG_FIRM] as $slug) {
+        Plan::factory()->create([
+            'slug' => $slug,
+            'features' => [PlanFeatures::DRAFTING, PlanFeatures::EXPORTS, PlanFeatures::WEB_SEARCH],
+            'is_active' => $slug !== Plan::SLUG_TRIAL,
+        ]);
+    }
+
+    $migration = require base_path('database/migrations/2026_09_15_000001_add_crm_feature_to_paid_plans.php');
+
+    $migration->up();
+    $migration->up();
+
+    foreach ([Plan::SLUG_STANDARD, Plan::SLUG_PRO, Plan::SLUG_FIRM] as $slug) {
+        expect(Plan::where('slug', $slug)->firstOrFail()->features)->toContain(PlanFeatures::CRM);
+    }
+
+    expect(Plan::where('slug', Plan::SLUG_TRIAL)->firstOrFail()->features)
+        ->not->toContain(PlanFeatures::CRM);
+
+    $migration->down();
+
+    foreach ([Plan::SLUG_STANDARD, Plan::SLUG_PRO, Plan::SLUG_FIRM] as $slug) {
+        expect(Plan::where('slug', $slug)->firstOrFail()->features)->not->toContain(PlanFeatures::CRM);
+    }
+});
+
 it('moves legacy Business subscribers onto the annual-only Firm tier', function (): void {
     $firm = Plan::factory()->firm()->create([
         'annual_only' => false,

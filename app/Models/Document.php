@@ -23,6 +23,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'mime_type',
     'status',
     'error_message',
+    'embedding_model',
     'ai_usage_id',
 ])]
 class Document extends Model

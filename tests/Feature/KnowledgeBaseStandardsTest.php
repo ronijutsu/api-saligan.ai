@@ -62,7 +62,7 @@ it('propagates standard metadata when crawling a standard source', function () {
 
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
-        '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 4000, 0.25)]], 200),
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 0.25)]], 200),
         '*' => Http::response('<html><body><p>ISO standard summary.</p></body></html>', 200),
     ]);
 

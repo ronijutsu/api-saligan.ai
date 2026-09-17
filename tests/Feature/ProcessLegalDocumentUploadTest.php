@@ -22,8 +22,8 @@ use RuntimeException;
 beforeEach(function () {
     Storage::fake('local');
     Http::fake([
-        '*/api/embed' => function (Request $request) {
-            $inputs = $request->data()['input'] ?? [];
+        '*/embeddings' => function (Request $request) {
+            $inputs = $request->data()['texts'] ?? [];
 
             return Http::response([
                 'embeddings' => array_map(

@@ -23,8 +23,8 @@ it('purchases additional seats and logs a billing event', function () {
         ->assertOk()
         // 4 seats on a plan bundling 3: the list price plus one extra seat.
         ->assertJsonPath('data.seats.purchased', 4)
-        ->assertJsonPath('data.seats.next_invoice_amount', 1300000)
-        ->assertJsonPath('data.seats.next_invoice_pesos', 13000);
+        ->assertJsonPath('data.seats.next_invoice_amount', $this->plan->price + 200000)
+        ->assertJsonPath('data.seats.next_invoice_pesos', (int) round(($this->plan->price + 200000) / 100));
 
     expect($this->subscription->fresh()->seats_purchased)->toBe(4);
 
@@ -41,7 +41,7 @@ it('removes purchased seats and logs a billing event', function () {
         ->assertOk()
         // Back under the bundled three, so the invoice is the plan price flat.
         ->assertJsonPath('data.seats.purchased', 1)
-        ->assertJsonPath('data.seats.next_invoice_amount', 1100000);
+        ->assertJsonPath('data.seats.next_invoice_amount', $this->plan->price);
 
     $event = BillingEvent::firstWhere('subscription_id', $this->subscription->id);
     expect($event->event_type)->toBe(BillingEvent::EVENT_SEAT_REMOVED)
@@ -63,11 +63,11 @@ it('blocks reducing seats below the active member count', function () {
 
 it('computes the next invoice as the plan price plus the seats beyond the bundled ones', function () {
     // 2 seats on a plan bundling 3 — nothing extra to charge for.
-    expect($this->subscription->nextInvoiceAmount())->toBe(1100000);
+    expect($this->subscription->nextInvoiceAmount())->toBe($this->plan->price);
 
     $this->subscription->update(['seats_purchased' => 5]);
 
-    expect($this->subscription->fresh()->nextInvoiceAmount())->toBe(1100000 + 2 * 200000);
+    expect($this->subscription->fresh()->nextInvoiceAmount())->toBe($this->plan->price + 2 * 200000);
 });
 
 it("falls back to the plan's seat price when no per-seat price is set", function () {
@@ -131,5 +131,6 @@ it('exposes seat fields on the subscription resource', function () {
         ->assertOk()
         ->assertJsonPath('data.seats.purchased', 2)
         ->assertJsonPath('data.seats.price_per_seat', 200000)
-        ->assertJsonPath('data.seats.next_invoice_amount', 1100000);
+        // 2 seats on a plan bundling 3: still the plan price flat.
+        ->assertJsonPath('data.seats.next_invoice_amount', $this->plan->price);
 });

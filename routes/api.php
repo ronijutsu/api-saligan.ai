@@ -11,8 +11,10 @@ use App\Http\Controllers\Api\Admin\VettingSettingsController;
 use App\Http\Controllers\Api\AdvisoryController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CaseAssigneeController;
+use App\Http\Controllers\Api\CaseClientController;
 use App\Http\Controllers\Api\CaseProgressController;
 use App\Http\Controllers\Api\ChatController;
+use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DemoRequestController;
@@ -33,6 +35,9 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\OrganizationController;
 use App\Http\Controllers\Api\PaypalVettingController;
 use App\Http\Controllers\Api\PaypalWebhookController;
+use App\Http\Controllers\Api\PipelineController;
+use App\Http\Controllers\Api\PipelineItemController;
+use App\Http\Controllers\Api\PipelineStageController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SubtaskController;
@@ -43,6 +48,8 @@ use App\Http\Controllers\Api\TemplateController;
 use App\Http\Controllers\Api\TermsController;
 use App\Http\Controllers\Api\TextRewriteController;
 use App\Http\Controllers\Api\TodoController;
+use App\Http\Controllers\Api\TopUpController;
+use App\Http\Controllers\Api\TopUpWebhookController;
 use App\Http\Controllers\Api\TourController;
 use App\Http\Controllers\Api\TrialCodeController;
 use App\Http\Controllers\Api\VettingRequestController;
@@ -57,6 +64,8 @@ Route::get('/paypal/vetting/return', [PaypalVettingController::class, 'return'])
 Route::get('/paypal/vetting/cancel', [PaypalVettingController::class, 'cancel']);
 
 Route::post('/vetting/webhook', [VettingWebhookController::class, 'payments']);
+
+Route::post('/paymongo/topup/webhook', [TopUpWebhookController::class, 'handle']);
 
 Route::get('/plans', [PlanController::class, 'index']);
 
@@ -146,6 +155,16 @@ Route::middleware(['auth:supabase', 'track_last_used', 'not_suspended'])->group(
     Route::post('/subscription/cancel', [SubscriptionController::class, 'cancel']);
     Route::post('/subscription/seats', [SubscriptionController::class, 'addSeats']);
     Route::delete('/subscription/seats', [SubscriptionController::class, 'removeSeats']);
+
+    // Prepaid extra AI usage (ADR-010). The response is the meter's companion,
+    // so it lives with the subscription routes rather than behind
+    // active_subscription: an account whose allowance is exhausted still needs
+    // to reach the control that unblocks it.
+    Route::get('/billing/top-ups', [TopUpController::class, 'show']);
+    Route::get('/billing/top-ups/history', [TopUpController::class, 'history']);
+    Route::patch('/billing/top-ups/settings', [TopUpController::class, 'updateSettings']);
+    Route::post('/billing/top-ups', [TopUpController::class, 'store'])
+        ->middleware('throttle:10,1');
 
     // The add-ons catalogue is a discovery surface, so it stays readable on
     // every plan — a locked card still has to render. Disconnecting is allowed
@@ -255,6 +274,45 @@ Route::middleware(['auth:supabase', 'track_last_used', 'not_suspended'])->group(
         Route::delete('/templates/{template}', [TemplateController::class, 'destroy']);
 
         Route::apiResource('cases', LegalCaseController::class);
+        Route::apiResource('clients', ClientController::class)->only(['index', 'show']);
+        Route::get('/clients/{client}/cases', [CaseClientController::class, 'clientIndex']);
+        Route::get('/cases/{case}/clients', [CaseClientController::class, 'caseIndex']);
+        Route::middleware(['crm.idempotency', 'throttle:crm-mutation'])->group(function (): void {
+            Route::post('/clients', [ClientController::class, 'store']);
+            Route::patch('/clients/{client}', [ClientController::class, 'update']);
+            Route::delete('/clients/{client}', [ClientController::class, 'destroy']);
+            Route::post('/clients/{client}/restore', [ClientController::class, 'restore']);
+            Route::post('/clients/{client}/cases', [CaseClientController::class, 'attachToClient']);
+            Route::delete('/clients/{client}/cases/{case}', [CaseClientController::class, 'detachFromClient']);
+            Route::post('/cases/{case}/clients', [CaseClientController::class, 'attachToCase']);
+            Route::delete('/cases/{case}/clients/{client}', [CaseClientController::class, 'detachFromCase']);
+        });
+
+        Route::get('/pipelines', [PipelineController::class, 'index']);
+        Route::get('/pipelines/{pipeline}', [PipelineController::class, 'show']);
+
+        Route::get('/pipeline-items', [PipelineItemController::class, 'index']);
+        Route::get('/pipeline-items/{item}', [PipelineItemController::class, 'show']);
+        Route::get('/pipeline-items/{item}/history', [PipelineItemController::class, 'history']);
+
+        Route::middleware('crm.idempotency')->group(function (): void {
+            Route::post('/pipelines', [PipelineController::class, 'store']);
+            Route::patch('/pipelines/{pipeline}', [PipelineController::class, 'update']);
+            Route::delete('/pipelines/{pipeline}', [PipelineController::class, 'destroy']);
+            Route::post('/pipelines/{pipeline}/restore', [PipelineController::class, 'restore']);
+            Route::post('/pipelines/{pipeline}/stages', [PipelineStageController::class, 'store']);
+            Route::post('/pipelines/{pipeline}/stages/reorder', [PipelineStageController::class, 'reorder']);
+            Route::patch('/pipelines/{pipeline}/stages/{stage}', [PipelineStageController::class, 'update']);
+            Route::delete('/pipelines/{pipeline}/stages/{stage}', [PipelineStageController::class, 'destroy']);
+            Route::post('/pipelines/{pipeline}/stages/{stage}/restore', [PipelineStageController::class, 'restore']);
+
+            Route::post('/pipeline-items', [PipelineItemController::class, 'store']);
+            Route::patch('/pipeline-items/{item}', [PipelineItemController::class, 'update']);
+            Route::delete('/pipeline-items/{item}', [PipelineItemController::class, 'destroy']);
+            Route::post('/pipeline-items/{item}/restore', [PipelineItemController::class, 'restore']);
+            Route::patch('/pipeline-items/{item}/stage', [PipelineItemController::class, 'move']);
+        });
+
         Route::get('/cases/{case}/progress', [CaseProgressController::class, 'show']);
         Route::patch('/cases/{case}/status', [LegalCaseController::class, 'updateStatus']);
         Route::post('/cases/{case}/conversations', [LegalCaseController::class, 'storeConversation']);

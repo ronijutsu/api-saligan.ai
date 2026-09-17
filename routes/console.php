@@ -97,3 +97,12 @@ Schedule::command('integrations:sync')
     ->everyTenMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+// Idempotency responses are intentionally retained only for the configured
+// retry window. The daily sweep keeps expired encrypted responses from growing
+// without bound while request-time lookup still removes an expired key before
+// accepting a new command with that key.
+Schedule::command('crm:prune-idempotency')
+    ->dailyAt('02:00')
+    ->withoutOverlapping()
+    ->onOneServer();

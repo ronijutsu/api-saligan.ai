@@ -21,6 +21,9 @@ pest()->extend(TestCase::class)
 pest()->extend(TestCase::class)
     ->in('Unit/ResendMailerTest.php');
 
+pest()->extend(TestCase::class)
+    ->in('Unit/PlansExportTest.php');
+
 /*
 |--------------------------------------------------------------------------
 | Expectations

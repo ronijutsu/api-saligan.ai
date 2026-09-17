@@ -42,8 +42,8 @@ beforeEach(function () {
     config()->set('saligan.documents.require_authenticated_encryption', false);
 
     Http::fake([
-        '*/api/embed' => function (Request $request) {
-            $inputs = $request->data()['input'] ?? [];
+        '*/embeddings' => function (Request $request) {
+            $inputs = $request->data()['texts'] ?? [];
 
             return Http::response([
                 'embeddings' => array_map(

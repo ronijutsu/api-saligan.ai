@@ -64,7 +64,11 @@ return [
     */
 
     'chat' => [
-        'engine' => env('AI_CHAT_ENGINE', 'laravel'),
+        // Python is the default: every AI call belongs in the ai-provider
+        // service, and Laravel's in-process engine is the opt-in fallback
+        // (`AI_CHAT_ENGINE=laravel`). Defaulting the other way meant a
+        // deployment that never set the variable quietly ran the old engine.
+        'engine' => env('AI_CHAT_ENGINE', 'python'),
         'provider' => env('AI_CHAT_PROVIDER', 'anthropic'),
         'ollama_model' => env('OLLAMA_CHAT_MODEL', 'qwen3.6:latest'),
         'ollama_model_alt' => env('OLLAMA_CHAT_MODEL_ALT', 'qwen3.5:latest'),
@@ -155,7 +159,10 @@ return [
     'ai_provider' => [
         'url' => env('AI_PROVIDER_URL', 'http://127.0.0.1:8080'),
         'internal_secret' => env('AI_INTERNAL_SECRET'),
-        'batch_engine' => env('AI_BATCH_ENGINE', 'laravel'),
+        // Same default, same reason: OCR, classification, rewrites, embeddings,
+        // letters and digests all run in ai-provider unless explicitly told
+        // otherwise with AI_BATCH_ENGINE=laravel.
+        'batch_engine' => env('AI_BATCH_ENGINE', 'python'),
         'connect_timeout' => (int) env('AI_PROVIDER_CONNECT_TIMEOUT', 5),
         'timeout' => (int) env('AI_PROVIDER_TIMEOUT', 300),
     ],
@@ -342,6 +349,71 @@ return [
         */
 
         'require_authenticated_encryption' => (bool) env('DOCUMENT_REQUIRE_AUTHENTICATED_ENCRYPTION', false),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Ingestion capacity limits
+        |--------------------------------------------------------------------------
+        |
+        | Every chunk becomes a halfvec(768) row and an HNSW entry — measured at
+        | roughly 3.6 kB per row — so an unbounded document is unbounded storage.
+        | A 25 MB text-heavy PDF extracts to ~26M characters, which chunks into
+        | ~58,000 rows (~210 MB of vectors and index) and ~3,600 embedding
+        | requests. These caps bound one document's ingestion; the per-user
+        | quota below bounds the account.
+        |
+        */
+
+        'max_extracted_characters' => (int) env('DOCUMENT_MAX_EXTRACTED_CHARACTERS', 2_500_000),
+        'max_chunks_per_document' => (int) env('DOCUMENT_MAX_CHUNKS', 5000),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Persistent index quota
+        |--------------------------------------------------------------------------
+        |
+        | The paid tiers deliberately leave `documents_uploaded` uncapped and let
+        | the monthly AI budget be the only spend gate — but that budget resets
+        | every month while vectors persist forever, so spend is capped and
+        | storage is not. This is the capacity gate: the maximum number of
+        | indexed chunks a single account (or, for a team, the whole
+        | organization) may hold at once. ~50,000 rows is ~180 MB of vectors.
+        |
+        */
+
+        'max_indexed_chunks_per_user' => (int) env('DOCUMENT_MAX_INDEXED_CHUNKS_PER_USER', 50_000),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Ingestion concurrency and write batching
+        |--------------------------------------------------------------------------
+        |
+        | `max_concurrent_ingests_per_user` stops one account from occupying the
+        | whole document-processing worker pool. Embeddings are generated and
+        | written in segments so a job that is killed mid-document keeps the
+        | segments it already finished and resumes instead of re-embedding — and
+        | re-paying for — the entire file. `insert_batch_size` keeps each
+        | multi-row INSERT under Postgres' parameter limit (7 columns, so 500
+        | rows is ~3,500 parameters against the 65,535 ceiling).
+        |
+        */
+
+        'max_concurrent_ingests_per_user' => (int) env('DOCUMENT_MAX_CONCURRENT_INGESTS', 2),
+        'embed_segment_chunks' => (int) env('DOCUMENT_EMBED_SEGMENT_CHUNKS', 512),
+        'insert_batch_size' => (int) env('DOCUMENT_INSERT_BATCH_SIZE', 500),
+
+        /*
+        |--------------------------------------------------------------------------
+        | OCR page ceiling
+        |--------------------------------------------------------------------------
+        |
+        | Vision OCR bills and runs per page, so an unbounded scan is an
+        | unbounded model bill from a single upload. Scans above this many pages
+        | are refused with a message asking for the relevant sections instead.
+        |
+        */
+
+        'max_ocr_pages' => (int) env('DOCUMENT_MAX_OCR_PAGES', 50),
 
         /*
         |--------------------------------------------------------------------------
