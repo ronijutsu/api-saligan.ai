@@ -51,11 +51,16 @@ class PythonConversationContext
             'provider' => $provider,
             'model' => $model,
             'plan_tier' => $user->plan()?->slug,
+            // The provider composes the prompt itself: it reads the persona
+            // from the database and owns the rules (handoff §13, b1). Shipping
+            // the rendered ~79k-character prompt on every turn was ~20k tokens
+            // of payload the provider had stopped reading. The persona stays as
+            // the fallback for a deployment whose provider cannot reach the
+            // database.
             'system_prompt' => [
                 'id' => (string) $prompt->id,
                 'version' => (int) $prompt->version,
                 'content' => (string) $prompt->content,
-                'instructions' => $this->prompts->staticInstructionsForPython(),
             ],
             'persistence' => [
                 'conversation_id' => (string) $conversation->id,
