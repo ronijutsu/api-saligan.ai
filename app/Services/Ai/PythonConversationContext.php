@@ -7,7 +7,7 @@ use App\Enums\MessageRole;
 use App\Models\Conversation;
 use App\Models\Template;
 use App\Models\User;
-use App\Services\Chat\ChatService;
+use App\Services\Chat\ConversationPromptAssembler;
 use App\Services\MatterMemory\MatterMemoryService;
 use App\Support\CaseContextBlock;
 use App\Support\PlanFeatures;
@@ -21,7 +21,7 @@ class PythonConversationContext
     public function __construct(
         private readonly CaseContextBlock $caseContext,
         private readonly MatterMemoryService $memory,
-        private readonly ChatService $chat,
+        private readonly ConversationPromptAssembler $prompts,
     ) {}
 
     /** @return array<string, mixed> */
@@ -35,8 +35,8 @@ class PythonConversationContext
         $deepResearch = in_array(PlanFeatures::DEEP_RESEARCH, $capabilities, true);
         $webSearchEnabled = in_array(PlanFeatures::WEB_SEARCH, $capabilities, true)
             && (bool) config('saligan.web_search.enabled', false);
-        $prompt = $this->chat->activeSystemPrompt();
-        $template = $this->chat->resolveTemplate($conversation, $currentMessage ?? '');
+        $prompt = $this->prompts->activeSystemPrompt();
+        $template = $this->prompts->resolveTemplate($conversation, $currentMessage ?? '');
         [$provider, $model] = $this->providerAndModel($conversation);
 
         return [
@@ -55,7 +55,7 @@ class PythonConversationContext
                 'id' => (string) $prompt->id,
                 'version' => (int) $prompt->version,
                 'content' => (string) $prompt->content,
-                'instructions' => $this->chat->staticInstructionsForPython(),
+                'instructions' => $this->prompts->staticInstructionsForPython(),
             ],
             'persistence' => [
                 'conversation_id' => (string) $conversation->id,
@@ -68,7 +68,7 @@ class PythonConversationContext
             'template' => $template !== null ? $this->template($template) : '',
             'resolved_template' => $template !== null ? $this->resolvedTemplate($template) : null,
             'template_mode' => $template?->isVerbatimTemplate() ? 'verbatim' : ($template !== null ? 'structured' : null),
-            'recent_intake_values' => (object) $this->chat->recentIntakeValues($conversation),
+            'recent_intake_values' => (object) $this->prompts->recentIntakeValues($conversation),
             'messages' => $conversation->messages()
                 ->whereIn('role', [MessageRole::User->value, MessageRole::Assistant->value])
                 ->latest()
