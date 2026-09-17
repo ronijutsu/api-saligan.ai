@@ -9,6 +9,7 @@ enum ChatProvider: string
     case OpenAI = 'openai';
     case Anthropic = 'anthropic';
     case Meta = 'meta';
+    case Openrouter = 'openrouter';
 
     /**
      * The provider to use by default for new conversations, taken from the

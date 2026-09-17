@@ -315,6 +315,23 @@ it('maps Meta to a hosted provider the Python service speaks', function () {
         ->assertJsonPath('model', config('saligan.chat.gemini_model'));
 });
 
+it('forwards OpenRouter to the Python service rather than mapping it', function () {
+    // OpenRouter is served through the OpenAI-compatible client, so the context
+    // builder passes it straight through: what the operator configured is what
+    // answers, and the free-only default model is what keeps it zero-cost.
+    config([
+        'saligan.chat.provider' => 'openrouter',
+        'ai.providers.openrouter.key' => 'test-openrouter-key',
+        'saligan.chat.openrouter_model' => 'openrouter/free',
+    ]);
+
+    $this->withToken('test-internal-secret')
+        ->getJson("/internal/conversations/{$this->conversation->id}/context")
+        ->assertOk()
+        ->assertJsonPath('provider', 'openrouter')
+        ->assertJsonPath('model', 'openrouter/free');
+});
+
 it('persists the turn usage the provider reports', function () {
     $messageId = (string) Str::uuid();
 

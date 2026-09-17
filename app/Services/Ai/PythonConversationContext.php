@@ -121,12 +121,19 @@ class PythonConversationContext
             ChatProvider::Gemini => filled(config('ai.providers.gemini.key'))
                 ? ['gemini', (string) config('saligan.chat.gemini_model')]
                 : $this->ollama(),
-            // The Python provider speaks Anthropic, Gemini, and Ollama only —
-            // it has no Meta or OpenAI client, and its schema rejects anything
-            // else. Mapping them to Gemini here, loudly, beats the previous
-            // behavior of falling through to Ollama silently and billing the
-            // customer for a frontier plan while serving the local model. When
-            // native clients land, these arms should forward, not map.
+            // OpenRouter serves through the OpenAI-compatible client, so it
+            // forwards rather than mapping: what the operator configured is
+            // what answers.
+            ChatProvider::Openrouter => filled(config('ai.providers.openrouter.key'))
+                ? ['openrouter', (string) config('saligan.chat.openrouter_model')]
+                : $this->ollama(),
+            // The Python provider speaks Anthropic, Gemini, OpenRouter and
+            // Ollama. It has no Meta or OpenAI client, and its schema rejects
+            // anything else. Mapping them to Gemini here, loudly, beats the
+            // previous behavior of falling through to Ollama silently and
+            // billing the customer for a frontier plan while serving the local
+            // model. When native clients land, these arms should forward, not
+            // map.
             ChatProvider::Meta, ChatProvider::OpenAI => $this->hostedFallback($provider),
             default => $this->ollama(),
         };

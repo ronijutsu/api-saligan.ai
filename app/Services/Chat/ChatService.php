@@ -1280,6 +1280,9 @@ PROMPT;
             ChatProvider::Meta => $this->metaConfigured()
                 ? ['meta', config('saligan.chat.meta_model')]
                 : [Lab::Ollama, config('saligan.chat.ollama_model')],
+            ChatProvider::Openrouter => $this->openrouterConfigured()
+                ? [Lab::OpenRouter, config('saligan.chat.openrouter_model')]
+                : [Lab::Ollama, config('saligan.chat.ollama_model')],
             default => [Lab::Ollama, config('saligan.chat.ollama_model')],
         };
     }
@@ -1341,6 +1344,11 @@ PROMPT;
     protected function metaConfigured(): bool
     {
         return filled(config('ai.providers.meta.key'));
+    }
+
+    protected function openrouterConfigured(): bool
+    {
+        return filled(config('ai.providers.openrouter.key'));
     }
 
     /**

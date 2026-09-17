@@ -112,6 +112,15 @@ return [
         'meta_model' => env('META_CHAT_MODEL', 'muse-spark-1.1'),
 
         /*
+         * OpenRouter is an OpenAI-compatible aggregator with namespaced model
+         * ids. The default is its free-only router: switching a deployment to
+         * OpenRouter without pinning a model must not start spending. Note that
+         * "openrouter/auto:free" does NOT restrict the Auto Router to free
+         * models — openrouter/free is the zero-cost slug.
+         */
+        'openrouter_model' => env('OPENROUTER_CHAT_MODEL', 'openrouter/free'),
+
+        /*
          * The Anthropic model served to plans without the `frontier_model`
          * feature — the free trial and Standard. Haiku 4.5 costs half of
          * Sonnet 5 per message at our measured token sizes (₱1.75 against

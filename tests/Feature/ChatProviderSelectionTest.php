@@ -280,3 +280,32 @@ it('serves the frontier model to everyone when no base model is configured', fun
         config('saligan.chat.anthropic_model'),
     ]);
 });
+
+it('derives OpenRouter as the default provider from configuration', function () {
+    config()->set('saligan.chat.provider', 'openrouter');
+    expect(ChatProvider::fromConfig())->toBe(ChatProvider::Openrouter);
+});
+
+it('uses OpenRouter when OpenRouter is the configured default and an API key is set', function () {
+    config()->set('saligan.chat.provider', 'openrouter');
+    config()->set('ai.providers.openrouter.key', 'test-key');
+
+    $conversation = Conversation::factory()->create();
+
+    expect($this->chat->resolveFor($conversation))->toBe([
+        Lab::OpenRouter,
+        config('saligan.chat.openrouter_model'),
+    ]);
+});
+
+it('falls back to Ollama when OpenRouter is the configured default but no API key is set', function () {
+    config()->set('saligan.chat.provider', 'openrouter');
+    config()->set('ai.providers.openrouter.key', '');
+
+    $conversation = Conversation::factory()->create();
+
+    expect($this->chat->resolveFor($conversation))->toBe([
+        Lab::Ollama,
+        config('saligan.chat.ollama_model'),
+    ]);
+});
