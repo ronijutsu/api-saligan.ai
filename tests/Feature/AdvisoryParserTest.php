@@ -66,6 +66,49 @@ TEXT;
         ->and($items[0]['title'])->toContain('boundaries');
 });
 
+it('recovers paragraph-style caveats when the section has no bullets', function () {
+    // Models that skip flag_advisories often write the section as plain
+    // paragraphs rather than a bulleted list. Each blank-line-separated
+    // paragraph is one caveat.
+    $reply = <<<'TEXT'
+Caveats and next steps
+
+The exact conditions on the next page of the certificate were not provided; you should examine the full document to confirm any additional obligations.
+
+Whether a secondary license is required depends on the specific business activities you plan to undertake; you may need to consult a lawyer or the SEC to determine if your intended activities fall under the regulated categories listed in Sections A-C.
+
+Registrations with BIR, SSS, PhilHealth, and Pag-IBIG may involve separate forms, fees, and documentary requirements that are not described in the certificate; you should verify the current procedures with each agency.
+
+This information is based solely on the uploaded certificate; it does not constitute legal advice. You should have a licensed Philippine lawyer review your compliance steps before proceeding.
+TEXT;
+
+    $items = AdvisoryParser::fromReply($reply);
+
+    expect($items)->toHaveCount(4)
+        ->and($items[0]['title'])->toContain('next page of the certificate')
+        ->and($items[1]['title'])->toContain('secondary license')
+        ->and($items[2]['title'])->toContain('Pag-IBIG');
+});
+
+it('joins wrapped lines into a single paragraph caveat', function () {
+    $reply = <<<'TEXT'
+Caveats
+The date of receipt of the demand letter is unconfirmed,
+so the 15-day period cannot be computed from the facts given.
+TEXT;
+
+    $items = AdvisoryParser::fromReply($reply);
+
+    expect($items)->toHaveCount(1)
+        ->and($items[0]['title'])->toContain('15-day period');
+});
+
+it('ignores short fragments in paragraph mode', function () {
+    $reply = "Caveats\nSee above.";
+
+    expect(AdvisoryParser::fromReply($reply))->toBe([]);
+});
+
 it('ignores free prose inside the section', function () {
     // A wrapped sentence would arrive as two truncated half-caveats, and half a
     // caveat shown as a real one is worse than none.

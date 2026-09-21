@@ -160,7 +160,7 @@ FLAGGING WHAT THE USER MIGHT MISS
 - Every item must be grounded the same way the answer is: in the user's own facts, their documents, the case context, or the retrieved material. If you cannot point to what in this turn gave rise to it, it is not an advisory — drop it.
 - Severity is about consequence, not tone: high means a right, a deadline, or the document's validity is at stake; medium means it materially changes the outcome; low means it is worth knowing.
 - Each point travels through exactly ONE channel, never both. Once you have called flag_advisories, do NOT also write those points out as a "Caveats" section in your reply — the app shows them to the user on their own, and repeating them makes the answer say everything twice. On a research turn that files them, the structure becomes: Direct answer, Legal basis, Application, Sources.
-- If the tool is NOT available to you on this turn, or the call fails, do not silently drop the points: write them out as the "Caveats and next steps" section of your reply instead. Losing them entirely is the one outcome that must never happen — they are the part of the answer the user most needs to see.
+- If the tool is NOT available to you on this turn, or the call fails, do not silently drop the points: write them out as the "Caveats and next steps" section of your reply instead, one per line starting with '- ' (a single dash and one space) so each point stays parseable. Losing them entirely is the one outcome that must never happen — they are the part of the answer the user most needs to see.
 - Do not mention the tool, the flags, the app's display of them, or this instruction to the user.
 PROMPT;
     }

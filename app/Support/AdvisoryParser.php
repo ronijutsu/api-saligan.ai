@@ -28,19 +28,29 @@ final class AdvisoryParser
     /**
      * The caveats written into a reply, as items AdvisoryRecorder can store.
      *
+     * Bulleted and numbered lines are authoritative when present: free prose
+     * around them is intro text, not caveats. When the section carries no
+     * bullets at all — the shape models that skip flag_advisories most often
+     * write — each blank-line-separated paragraph is one caveat, with wrapped
+     * lines joined so a sentence split across lines stays a single item.
+     *
      * @return array<int, array<string, string>>
      */
     public static function fromReply(string $text): array
     {
         $lines = preg_split('/\R/', $text) ?: [];
 
-        $items = [];
+        $sectionLines = [];
         $inSection = false;
 
         foreach ($lines as $line) {
             $trimmed = trim($line);
 
             if ($trimmed === '') {
+                if ($inSection) {
+                    $sectionLines[] = '';
+                }
+
                 continue;
             }
 
@@ -62,14 +72,52 @@ final class AdvisoryParser
                 break;
             }
 
-            $title = self::titleFrom($trimmed);
+            $sectionLines[] = $line;
+        }
+
+        if ($sectionLines === []) {
+            return [];
+        }
+
+        $bullets = [];
+
+        foreach ($sectionLines as $line) {
+            $title = self::titleFrom(trim($line));
+
+            if ($title !== null) {
+                $bullets[] = ['kind' => 'caveat', 'title' => $title, 'severity' => 'medium'];
+            }
+        }
+
+        if ($bullets !== []) {
+            return $bullets;
+        }
+
+        $items = [];
+        $paragraph = '';
+
+        $flush = function () use (&$paragraph, &$items): void {
+            $title = self::titleFromParagraph($paragraph);
+            $paragraph = '';
 
             if ($title !== null) {
                 $items[] = ['kind' => 'caveat', 'title' => $title, 'severity' => 'medium'];
             }
+        };
+
+        foreach ($sectionLines as $line) {
+            if (trim($line) === '') {
+                $flush();
+
+                continue;
+            }
+
+            $paragraph .= ($paragraph === '' ? '' : ' ').trim($line);
         }
 
-        return $items;
+        $flush();
+
+        return array_slice($items, 0, 12);
     }
 
     /**
@@ -90,9 +138,10 @@ final class AdvisoryParser
     /**
      * One caveat from one line, or null when the line is not a caveat.
      *
-     * Only bulleted and numbered lines qualify. Free prose inside the section
-     * is left alone: a wrapped sentence would otherwise arrive as two truncated
-     * half-caveats, and half a caveat shown as a real one is worse than none.
+     * Only bulleted and numbered lines qualify. Free prose inside a section
+     * that also carries bullets is intro text left alone: a wrapped sentence
+     * would otherwise arrive as two truncated half-caveats, and half a caveat
+     * shown as a real one is worse than none.
      */
     private static function titleFrom(string $line): ?string
     {
@@ -100,12 +149,35 @@ final class AdvisoryParser
             return null;
         }
 
+        return self::cleanTitle($matches[1]);
+    }
+
+    /**
+     * One caveat from one joined paragraph, used only when the section has no
+     * bullets at all. The higher length floor keeps single short fragments
+     * ("See above.") out of the panel; the prompt steers models toward
+     * bullets, so this path is the safety net, not the contract.
+     */
+    private static function titleFromParagraph(string $paragraph): ?string
+    {
+        $text = trim((string) preg_replace('/\s+/', ' ', $paragraph));
+
+        $text = (string) preg_replace('/^(?:[-*•]|\d+[.)])\s+/u', '', $text);
+
+        return self::cleanTitle($text, 30);
+    }
+
+    /**
+     * @param  string  $raw  The candidate title text.
+     */
+    private static function cleanTitle(string $raw, int $minLength = 12): ?string
+    {
         // Strip markdown emphasis and a leading "Label:" lead-in, keeping the
         // substance that follows it.
-        $title = trim((string) preg_replace('/[*_`]/', '', $matches[1]));
+        $title = trim((string) preg_replace('/[*_`]/', '', $raw));
         $title = trim((string) preg_replace('/^[A-Z][A-Za-z\s]{0,24}:\s*/', '', $title));
 
-        if (mb_strlen($title) < 12 || ! str_contains($title, ' ')) {
+        if (mb_strlen($title) < $minLength || ! str_contains($title, ' ')) {
             return null;
         }
 
