@@ -177,6 +177,23 @@ return [
     ],
 
     /*
+    |--------------------------------------------------------------------------
+    | Legal crawler (on-demand captures)
+    |--------------------------------------------------------------------------
+    |
+    | The dedicated crawler downloads a cited PDF and runs it through OCR when
+    | it has no text layer. Leave the url empty to disable: scanned PDFs are
+    | then reported as unreadable rather than read.
+    |
+    */
+
+    'legal_crawler' => [
+        'url' => env('LEGAL_CRAWLER_URL'),
+        'secret' => env('LEGAL_CRAWLER_SECRET'),
+        'timeout' => (int) env('LEGAL_CRAWLER_TIMEOUT', 15),
+    ],
+
+    /*
      | Case digests are asynchronous so chat and document writes never wait on
      | a second model call. A database-backed connection is the deployment
      | default even when the request queue uses a different connection.

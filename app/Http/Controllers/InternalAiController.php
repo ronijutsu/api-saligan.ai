@@ -57,9 +57,20 @@ class InternalAiController extends Controller
         $result = DB::transaction(function () use ($conversation, $validated): array {
             Conversation::query()->whereKey($conversation->id)->lockForUpdate()->firstOrFail();
 
+            // Idempotency belongs to this conversation. A UUID supplied by a
+            // different turn must never make this callback silently report
+            // success for another thread.
             $existing = Message::query()->find($validated['message_id']);
 
             if ($existing !== null) {
+                if ((string) $existing->conversation_id !== (string) $conversation->id) {
+                    abort(409, 'Message id belongs to another conversation.');
+                }
+
+                if ($existing->role !== MessageRole::Assistant) {
+                    abort(409, 'Message id belongs to another message.');
+                }
+
                 return [
                     'ok' => true,
                     'message_id' => $existing->id,

@@ -44,6 +44,17 @@ final class WebSourceResolver
     ];
 
     /**
+     * File extensions that mark a URL as an image or other static asset rather
+     * than a document. Grounding occasionally reports one as a "source"
+     * (a page's social-preview image, say), and a card that opens a bare .webp
+     * cites nothing a reader can check.
+     */
+    private const ASSET_EXTENSIONS = [
+        'webp', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'avif', 'bmp', 'tif', 'tiff',
+        'mp3', 'mp4', 'webm', 'mov', 'css', 'js', 'woff', 'woff2',
+    ];
+
+    /**
      * How much of a page is read looking for its title. The title is in the
      * head, so this never needs to be large — and the read happens inside a
      * chat turn, against pages (full Supreme Court decisions) that run to
@@ -61,8 +72,14 @@ final class WebSourceResolver
      */
     public static function resolve(array $citations): array
     {
-        if ($citations === [] || ! config('saligan.web_search.resolve_sources', true)) {
+        if ($citations === []) {
             return $citations;
+        }
+
+        // Without resolving there is no way to turn a redirect into a page, so
+        // redirects are the one thing that must be kept as they are.
+        if (! config('saligan.web_search.resolve_sources', true)) {
+            return self::withoutAssets($citations);
         }
 
         $pending = [];
@@ -73,15 +90,48 @@ final class WebSourceResolver
             }
         }
 
-        if ($pending === []) {
-            return $citations;
-        }
-
-        foreach (self::fetch($pending) as $position => $resolved) {
+        foreach ($pending === [] ? [] : self::fetch($pending) as $position => $resolved) {
             $citations[$position] = array_merge($citations[$position], $resolved);
         }
 
-        return $citations;
+        // A redirect that is still a redirect could not be followed to the
+        // page it stands for. Showing it would put a Google redirect URL in
+        // front of the reader in place of the document, so it is dropped.
+        return array_values(array_filter(
+            self::withoutAssets($citations),
+            fn (array $citation): bool => ! self::isRedirector($citation['url']),
+        ));
+    }
+
+    /**
+     * Whether a url is an image or other static asset rather than a document.
+     */
+    public static function isAsset(string $url): bool
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+
+        return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), self::ASSET_EXTENSIONS, true);
+    }
+
+    /**
+     * Whether a url is a redirect through a search engine rather than the
+     * source itself.
+     */
+    public static function isRedirector(string $url): bool
+    {
+        return in_array(strtolower((string) parse_url($url, PHP_URL_HOST)), self::REDIRECTORS, true);
+    }
+
+    /**
+     * @param  array<int, array{url: string, title: string|null, snippet?: string|null}>  $citations
+     * @return array<int, array{url: string, title: string|null, snippet?: string|null}>
+     */
+    protected static function withoutAssets(array $citations): array
+    {
+        return array_values(array_filter(
+            $citations,
+            fn (array $citation): bool => ! self::isAsset($citation['url']),
+        ));
     }
 
     /**
@@ -92,13 +142,11 @@ final class WebSourceResolver
      */
     protected static function needsResolving(array $citation): bool
     {
-        $host = strtolower((string) parse_url($citation['url'], PHP_URL_HOST));
-
-        if ($host === '') {
+        if (parse_url($citation['url'], PHP_URL_HOST) === null) {
             return false;
         }
 
-        if (in_array($host, self::REDIRECTORS, true)) {
+        if (self::isRedirector($citation['url'])) {
             return true;
         }
 

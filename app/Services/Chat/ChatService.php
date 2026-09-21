@@ -80,6 +80,12 @@ class ChatService
     protected ?string $pendingAssistantMessageId = null;
 
     /**
+     * Client-supplied identity for the current turn, when the caller can
+     * provide one. It is consumed by stream() and never reused implicitly.
+     */
+    protected ?string $requestedAssistantMessageId = null;
+
+    /**
      * Placeholder values the model supplied through fill_template_fields on
      * the current turn, keyed by the literal template token. Persisted onto
      * the assistant message so the export can fill the user's own .docx with
@@ -150,6 +156,14 @@ class ChatService
     public function setUsageReservation(?AiUsage $usage): void
     {
         $this->usageReservation = $usage;
+    }
+
+    /**
+     * Make the next stream use a caller-generated id for idempotent retries.
+     */
+    public function setClientRequestId(?string $requestId): void
+    {
+        $this->requestedAssistantMessageId = $requestId;
     }
 
     /**
@@ -388,7 +402,8 @@ class ChatService
 
         [$provider, $model] = $this->resolveProvider($conversation);
 
-        $assistantMessageId = (string) Str::uuid();
+        $assistantMessageId = $this->requestedAssistantMessageId ?? (string) Str::uuid();
+        $this->requestedAssistantMessageId = null;
 
         $this->pendingAssistantMessageId = $assistantMessageId;
 
@@ -1146,7 +1161,7 @@ PROMPT
     {
         return <<<'PROMPT'
 
-- Prefer official domains: Supreme Court E-Library (sc.judiciary.gov.ph), lawphil.net, officialgazette.gov.ph, dar.gov.ph (agrarian reform), denr.gov.ph, lra.gov.ph (land registration), bir.gov.ph (tax matters affecting real property), and the relevant LGU site where applicable.
+- Prefer official domains: Supreme Court E-Library (sc.judiciary.gov.ph), lawphil.net, officialgazette.gov.ph, dar.gov.ph (agrarian reform), denr.gov.ph, lra.gov.ph (land registration), bir.gov.ph (tax matters affecting real property), dole.gov.ph (labor), sec.gov.ph (corporate), dhsud.gov.ph (housing and rent), privacy.gov.ph (data privacy), senate.gov.ph and congress.gov.ph (statute texts), ca.judiciary.gov.ph (Court of Appeals decisions), and the relevant LGU site where applicable.
 - When researching a statute or administrative issuance, check whether it has been amended and cite the amending law/issuance alongside the original provision.
 - When researching prescriptive or reglementary periods, cite the specific provision or rule stating the period and, where possible, the date it runs from based on the facts given.
 - Cite a web result inline as "[Web N]" — the number the search returned for that source (its "cite_as" value when the tool gives one, otherwise the order the results came back in) — placed immediately after the sentence it supports. Never write a page title, site name, or URL yourself, and never list a web result in the "Sources" section — the app renders web citations as clickable source cards automatically. Alongside the [Web N] marker, name the specific statute/section, administrative issuance number, or G.R. number the result establishes.
@@ -2115,6 +2130,26 @@ PROMPT;
     public function pendingAssistantMessageId(): ?string
     {
         return $this->pendingAssistantMessageId;
+    }
+
+    /**
+     * The assistant message written by the most recent completed turn.
+     *
+     * The streaming client uses this id to replace its optimistic bubble with
+     * the durable message after the stream finishes. Comparing rendered text
+     * is unsafe because persistence intentionally trims and sanitizes it.
+     */
+    public function lastAssistantMessageId(): ?string
+    {
+        return $this->lastAssistantMessageId;
+    }
+
+    /**
+     * The user message written at the start of the most recent turn.
+     */
+    public function createdUserMessageId(): ?string
+    {
+        return $this->createdUserMessageId;
     }
 
     /**

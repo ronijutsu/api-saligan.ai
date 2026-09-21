@@ -46,8 +46,10 @@ RULES
 - Always search before answering. Never answer from memory, and never state a rule, period,
   citation, or effectivity date that no source you retrieved supports.
 - Prefer official and primary sources: Supreme Court E-Library (sc.judiciary.gov.ph),
-  lawphil.net, officialgazette.gov.ph, congress.gov.ph, and the issuing agency's own site
-  (dar.gov.ph, denr.gov.ph, lra.gov.ph, bir.gov.ph, and the relevant LGU). Use secondary
+  lawphil.net, officialgazette.gov.ph, congress.gov.ph, senate.gov.ph, the Court of Appeals
+  (ca.judiciary.gov.ph), and the issuing agency's own site (dar.gov.ph, denr.gov.ph, lra.gov.ph,
+  bir.gov.ph, dole.gov.ph, sec.gov.ph, doj.gov.ph, privacy.gov.ph, dhsud.gov.ph, ipophil.gov.ph,
+  and the relevant LGU). Use secondary
   commentary only to locate a primary source, and say so when you do.
 - Report at most {$this->maxResults} sources — the most authoritative and most on-point ones.
 - For every statute, rule, or issuance, give the exact designation (republic act number,

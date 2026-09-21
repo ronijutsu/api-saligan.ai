@@ -39,9 +39,37 @@ final class WebSearchTrail
     public static function reading(array $citations): array
     {
         return ['phase' => 'reading', 'sources' => array_values(array_filter(array_map(
-            static fn (array $citation): ?array => self::row($citation['url'] ?? null, null, null),
+            static fn (array $citation): ?array => self::pendingRow($citation),
             $citations,
         )))];
+    }
+
+    /**
+     * A row for a page that has not been fetched yet. A grounding redirect
+     * names the redirector rather than the site, so its host is replaced by
+     * the publisher domain the search titled it with — or the row is left out
+     * when it gave none, rather than showing the redirector as if it were
+     * being read.
+     *
+     * @param  array{url?: string, title?: string|null}  $citation
+     * @return array<string, mixed>|null
+     */
+    private static function pendingRow(array $citation): ?array
+    {
+        $url = $citation['url'] ?? null;
+        $row = self::row($url, null, null);
+
+        if ($row === null || ! WebSourceResolver::isRedirector((string) $url)) {
+            return $row;
+        }
+
+        $title = trim((string) ($citation['title'] ?? ''));
+
+        if (preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $title) !== 1) {
+            return null;
+        }
+
+        return ['domain' => preg_replace('/^www\./i', '', $title)] + $row;
     }
 
     /**
@@ -91,7 +119,7 @@ final class WebSearchTrail
      */
     private static function row(?string $url, ?string $title, ?int $index): ?array
     {
-        if (! is_string($url) || $url === '') {
+        if (! is_string($url) || $url === '' || WebSourceResolver::isAsset($url)) {
             return null;
         }
 

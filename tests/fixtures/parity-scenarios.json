@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "description": "Engine-parity scenarios. Laravel resolves the authoritative conversation context from these inputs and emits it on the /internal context contract; Python parses that same context and must expose exactly the tools it permits. Both suites read this file, so a change one engine makes without the other fails that engine's suite.",
+  "scenarios": [
+    {
+      "id": "base-plan-without-web-search",
+      "setup": {
+        "plan_features": ["drafting"],
+        "web_search_config_enabled": false,
+        "template": null
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    },
+    {
+      "id": "search-enabled-plan",
+      "setup": {
+        "plan_features": ["drafting", "web_search"],
+        "web_search_config_enabled": true,
+        "template": null
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search"],
+        "deep_research": false,
+        "web_search_enabled": true,
+        "web_search_max_calls": 2,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": true,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    },
+    {
+      "id": "deep-research-bounds-search",
+      "setup": {
+        "plan_features": ["drafting", "web_search", "deep_research"],
+        "web_search_config_enabled": true,
+        "template": null
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search", "deep_research"],
+        "deep_research": true,
+        "web_search_enabled": true,
+        "web_search_max_calls": 4,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": true,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    },
+    {
+      "id": "deployment-disables-search-despite-plan",
+      "setup": {
+        "plan_features": ["drafting", "web_search", "deep_research"],
+        "web_search_config_enabled": false,
+        "template": null
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search", "deep_research"],
+        "deep_research": true,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    },
+    {
+      "id": "explicit-structured-template",
+      "setup": {
+        "plan_features": ["drafting"],
+        "web_search_config_enabled": false,
+        "template": { "explicit": true, "mode": "structured" }
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": "structured",
+        "resolved_template": { "mode": "structured" },
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    },
+    {
+      "id": "explicit-verbatim-template",
+      "setup": {
+        "plan_features": ["drafting"],
+        "web_search_config_enabled": false,
+        "template": { "explicit": true, "mode": "verbatim" }
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": "verbatim",
+        "resolved_template": { "mode": "verbatim" },
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": true,
+        "always": ["create_todo", "flag_advisories"]
+      }
+    }
+  ]
+}

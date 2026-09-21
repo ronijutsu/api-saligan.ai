@@ -298,10 +298,39 @@ it('persists a completed turn idempotently', function () {
         ->and($assistant->metadata['activity'][0]['status'])->toBe('composing');
 });
 
-it('maps Meta to a hosted provider the Python service speaks', function () {
-    // Python has no Meta client and rejects the provider outright, so the
-    // context builder must never hand it `meta` — previously it fell through
-    // to Ollama without saying so.
+it('does not treat a message id from another conversation as idempotent', function () {
+    $messageId = (string) Str::uuid();
+    $otherConversation = Conversation::factory()->for($this->user)->create();
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => $messageId,
+        'user' => ['content' => 'First turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'First answer.'],
+    ])->assertOk();
+
+    internalAiPost("/internal/conversations/{$otherConversation->id}/messages", [
+        'message_id' => $messageId,
+        'user' => ['content' => 'Second turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'Second answer.'],
+    ])->assertStatus(409);
+});
+
+it('does not treat a user message id as an idempotent assistant callback', function () {
+    $userMessage = Message::factory()->for($this->conversation)->create([
+        'role' => MessageRole::User,
+        'content' => 'Already persisted user turn.',
+    ]);
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => $userMessage->id,
+        'user' => ['content' => 'Retrying the turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'This must not overwrite a user message.'],
+    ])->assertStatus(409);
+});
+
+it('forwards Meta to the Python service when configured', function () {
+    // Meta is served through its OpenAI-compatible endpoint by the Python
+    // adapter, so the context must preserve the provider and configured model.
     config([
         'saligan.chat.provider' => 'meta',
         'ai.providers.meta.key' => 'test-meta-key',
@@ -311,8 +340,8 @@ it('maps Meta to a hosted provider the Python service speaks', function () {
     $this->withToken('test-internal-secret')
         ->getJson("/internal/conversations/{$this->conversation->id}/context")
         ->assertOk()
-        ->assertJsonPath('provider', 'gemini')
-        ->assertJsonPath('model', config('saligan.chat.gemini_model'));
+        ->assertJsonPath('provider', 'meta')
+        ->assertJsonPath('model', config('saligan.chat.meta_model'));
 });
 
 it('forwards OpenRouter to the Python service rather than mapping it', function () {

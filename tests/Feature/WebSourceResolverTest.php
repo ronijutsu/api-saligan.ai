@@ -10,7 +10,8 @@ beforeEach(function () {
 
 it('identifies a grounding redirect by the page it leads to', function () {
     Http::fake([
-        'vertexaisearch.cloud.google.com/*' => Http::response(
+        'vertexaisearch.cloud.google.com/*' => Http::response('', 302, ['Location' => 'https://elibrary.judiciary.gov.ph/showdocs/186204']),
+        'elibrary.judiciary.gov.ph/*' => Http::response(
             '<html><head><title>G.R. No. 186204 - Spouses Javier v. Spouses De Guzman</title></head><body>…</body></html>',
         ),
     ]);
@@ -50,12 +51,52 @@ it('leaves a source that already names itself alone', function () {
     Http::assertNothingSent();
 });
 
-it('keeps what the search gave when the page cannot be read', function () {
+it('drops a grounding redirect it could not follow to the page', function () {
     Http::fake(['*' => Http::response('nope', 503)]);
 
-    $citations = [['url' => 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ', 'title' => 'lawphil.net']];
+    $citations = [
+        ['url' => 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ', 'title' => 'lawphil.net'],
+        ['url' => 'https://lawphil.net/statutes/repacts/ra1997/ra_8371_1997.html', 'title' => 'RA 8371'],
+    ];
+
+    expect(WebSourceResolver::resolve($citations))->toBe([$citations[1]]);
+});
+
+it('keeps a non-redirect source when the page cannot be read', function () {
+    Http::fake(['*' => Http::response('nope', 503)]);
+
+    $citations = [['url' => 'https://lawphil.net/some-page', 'title' => 'lawphil.net']];
 
     expect(WebSourceResolver::resolve($citations))->toBe($citations);
+});
+
+it('drops image and asset urls', function () {
+    Http::fake();
+
+    $citations = [
+        ['url' => 'https://example.com/uploads/og-image.webp', 'title' => 'Share image'],
+        ['url' => 'https://example.com/photo.JPG?w=200', 'title' => 'Photo'],
+        ['url' => 'https://lawphil.net/statutes/repacts/ra1997/ra_8371_1997.html', 'title' => 'RA 8371'],
+    ];
+
+    expect(WebSourceResolver::resolve($citations))->toBe([$citations[2]]);
+
+    config()->set('saligan.web_search.resolve_sources', false);
+
+    expect(WebSourceResolver::resolve($citations))->toBe([$citations[2]]);
+});
+
+it('drops a redirect that lands on an image', function () {
+    Http::fake([
+        'vertexaisearch.cloud.google.com/*' => Http::response('', 302, ['Location' => 'https://example.com/cover.webp']),
+        'example.com/*' => Http::response('binary'),
+    ]);
+
+    $resolved = WebSourceResolver::resolve([
+        ['url' => 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ', 'title' => 'example.com'],
+    ]);
+
+    expect($resolved)->toBe([]);
 });
 
 it('keeps what the search gave when the page carries no title', function () {
@@ -91,7 +132,10 @@ it('refuses to fetch a source that is not a public address', function () {
 });
 
 it('preserves the snippet a search reported alongside the resolved identity', function () {
-    Http::fake(['*' => Http::response('<html><head><title>Real Page</title></head></html>')]);
+    Http::fake([
+        'vertexaisearch.cloud.google.com/*' => Http::response('', 302, ['Location' => 'https://lawphil.net/real-page']),
+        'lawphil.net/*' => Http::response('<html><head><title>Real Page</title></head></html>'),
+    ]);
 
     $resolved = WebSourceResolver::resolve([
         ['url' => 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ', 'title' => null, 'snippet' => 'Article 448 applies.'],

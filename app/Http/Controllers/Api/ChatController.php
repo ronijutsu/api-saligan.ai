@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AiUsage;
 use App\Models\Conversation;
 use App\Models\Document;
+use App\Models\Message;
 use App\Models\Todo;
 use App\Models\User;
 use App\Services\Ai\PythonAiClient;
@@ -22,7 +23,10 @@ use App\Support\DraftingIntent;
 use App\Support\WebCitationParser;
 use Closure;
 use Generator;
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Streaming\Events\Citation;
 use Laravel\Ai\Streaming\Events\Error as ErrorEvent;
@@ -48,38 +52,87 @@ class ChatController extends Controller
     /**
      * Answer a message in a conversation, streaming the response as SSE.
      */
-    public function store(Request $request, Conversation $conversation): StreamedResponse
+    public function store(Request $request, Conversation $conversation): StreamedResponse|JsonResponse
     {
         abort_unless($conversation->isAccessibleBy($request->user()), 403);
 
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:8000'],
+            'request_id' => ['sometimes', 'uuid'],
             'attachment_ids' => ['array', 'max:10'],
             'attachment_ids.*' => ['uuid'],
         ]);
+
+        $requestId = $validated['request_id'] ?? null;
+        $requestLock = null;
+
+        if ($requestId !== null) {
+            // A completed retry can be answered from the durable row without
+            // buying another model call. The id is scoped to this conversation
+            // so a caller cannot use it to discover another thread's message.
+            $existing = Message::query()->find($requestId);
+
+            if ($existing?->conversation_id === $conversation->id && $existing->role->value === 'assistant') {
+                $frames = (function () use ($requestId): Generator {
+                    yield $this->sseFrame('done', [
+                        'ok' => true,
+                        'web_citations' => 0,
+                        'message_id' => $requestId,
+                    ]);
+                })();
+
+                return response()->stream($this->streamEmitter($frames), 200, [
+                    'Content-Type' => 'text/event-stream',
+                    'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                    'X-Accel-Buffering' => 'no',
+                    'Connection' => 'keep-alive',
+                ]);
+            }
+
+            if ($existing !== null) {
+                return response()->json([
+                    'message' => 'The request id is already used by another message.',
+                ], 409);
+            }
+
+            $requestLock = Cache::lock("chat.turn.{$conversation->id}.{$requestId}", 900);
+
+            if (! $requestLock->get()) {
+                return response()->json([
+                    'message' => 'This message is already being processed.',
+                    'request_id' => $requestId,
+                ], 409);
+            }
+        }
 
         // One spend reservation covers the whole turn on either engine: the
         // answering call plus whatever helpers it fans out to. Helpers never
         // reserve on their own, so a turn with three searches costs one hold
         // and settles one measured total.
-        $reservation = AiBudget::reserve(
-            $request->user(),
-            AiUsage::OPERATION_CHAT,
-            context: [
-                'conversation_id' => $conversation->id,
-                'engine' => config('saligan.chat.engine'),
-            ],
-        );
+        try {
+            $reservation = AiBudget::reserve(
+                $request->user(),
+                AiUsage::OPERATION_CHAT,
+                context: [
+                    'conversation_id' => $conversation->id,
+                    'engine' => config('saligan.chat.engine'),
+                ],
+            );
+        } catch (Throwable $exception) {
+            $requestLock?->release();
 
-        $message = $validated['message'];
+            throw $exception;
+        }
 
-        $attachmentIds = $this->ownedAttachmentIds($request, $validated['attachment_ids'] ?? []);
+        try {
+            $message = $validated['message'];
 
-        $isDraftingRequest = DraftingIntent::matches($message);
-        $isIntakeSubmission = DraftingIntent::isIntakeSubmission($message);
+            $attachmentIds = $this->ownedAttachmentIds($request, $validated['attachment_ids'] ?? []);
 
-        if (config('saligan.chat.engine') === 'python') {
-            try {
+            $isDraftingRequest = DraftingIntent::matches($message);
+            $isIntakeSubmission = DraftingIntent::isIntakeSubmission($message);
+
+            if (config('saligan.chat.engine') === 'python') {
                 $upstream = $this->pythonAi->streamChat(
                     $conversation->id,
                     $message,
@@ -87,38 +140,62 @@ class ChatController extends Controller
                     $isDraftingRequest,
                     $isIntakeSubmission,
                     $reservation->id,
+                    $requestId,
                 );
-            } catch (Throwable $exception) {
-                // The provider never started, so neither side persisted a
-                // message for this turn: release the hold. Failures later in
-                // the relay are deliberately not released here — the provider
-                // may already have persisted the reply through its callback
-                // and settled it, and releasing that would make completed
-                // work free.
-                AiBudget::release($reservation);
-
-                throw $exception;
+                $frames = $this->pythonAi->body($upstream);
+            } else {
+                $this->chatService->setClientRequestId($requestId);
+                $this->chatService->setUsageReservation($reservation);
+                $frames = $this->chatFrames(
+                    $conversation,
+                    $message,
+                    $isDraftingRequest,
+                    $isIntakeSubmission,
+                    $attachmentIds,
+                    $request->user(),
+                    $reservation,
+                );
             }
-            $frames = $this->pythonAi->body($upstream);
-        } else {
-            $this->chatService->setUsageReservation($reservation);
-            $frames = $this->chatFrames(
-                $conversation,
-                $message,
-                $isDraftingRequest,
-                $isIntakeSubmission,
-                $attachmentIds,
-                $request->user(),
-                $reservation,
-            );
-        }
 
-        return response()->stream($this->streamEmitter($frames), 200, [
-            'Content-Type' => 'text/event-stream',
-            'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            'X-Accel-Buffering' => 'no',
-            'Connection' => 'keep-alive',
-        ]);
+            if ($requestLock !== null) {
+                $frames = $this->releaseRequestLock($frames, $requestLock);
+            }
+
+            return response()->stream($this->streamEmitter($frames), 200, [
+                'Content-Type' => 'text/event-stream',
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                'X-Accel-Buffering' => 'no',
+                'Connection' => 'keep-alive',
+            ]);
+        } catch (Throwable $exception) {
+            // Setup failures happen before the response body is consumed, so
+            // no provider callback can have settled the hold yet. Release
+            // both resources and keep retries from being blocked by a stale
+            // fifteen-minute lock. release() is idempotent if the provider
+            // path already handled the same failure.
+            AiBudget::release($reservation);
+            $requestLock?->release();
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Hold a duplicate-send lock for the complete upstream stream, not merely
+     * for the time it takes to construct the response. A second browser POST
+     * therefore cannot start a second provider turn while the first is still
+     * generating.
+     *
+     * @param  Generator<int, string>  $frames
+     * @return Generator<int, string>
+     */
+    protected function releaseRequestLock(Generator $frames, Lock $lock): Generator
+    {
+        try {
+            yield from $frames;
+        } finally {
+            $lock->release();
+        }
     }
 
     /**
@@ -899,7 +976,27 @@ class ChatController extends Controller
                 // streamed: the persisted copy has already had them removed,
                 // and without this the live answer would keep dead badges the
                 // reader can click but never resolve.
-                yield $emit('done', ['ok' => $completed, 'web_citations' => $webIndex]);
+                //
+                // Include the durable ids so the client can hand its
+                // optimistic messages over to the server copy by identity.
+                // Persistence normalizes the answer text, so content equality
+                // is not a reliable deduplication key.
+                $done = [
+                    'ok' => $completed,
+                    'web_citations' => $webIndex,
+                ];
+                $userMessageId = $this->chatService->createdUserMessageId();
+                $assistantMessageId = $this->chatService->lastAssistantMessageId();
+
+                if ($userMessageId !== null) {
+                    $done['user_message_id'] = $userMessageId;
+                }
+
+                if ($assistantMessageId !== null) {
+                    $done['message_id'] = $assistantMessageId;
+                }
+
+                yield $emit('done', $done);
             }
         } catch (StreamStoppedException) {
             // Same as above: the client is gone, so there is nothing to report

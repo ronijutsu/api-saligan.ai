@@ -54,6 +54,7 @@ use App\Http\Controllers\Api\TourController;
 use App\Http\Controllers\Api\TrialCodeController;
 use App\Http\Controllers\Api\VettingRequestController;
 use App\Http\Controllers\Api\VettingWebhookController;
+use App\Http\Controllers\Api\WebPageController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/subscriptions/webhook', [SubscriptionController::class, 'webhook']);
@@ -240,6 +241,10 @@ Route::middleware(['auth:supabase', 'track_last_used', 'not_suspended'])->group(
         Route::post('/documents/{document}/retry', [DocumentController::class, 'retry']);
         Route::get('/documents/{document}/file', [DocumentController::class, 'file']);
         Route::get('/documents/{document}/content', [DocumentController::class, 'content']);
+
+        // Fetches an arbitrary public page and pays for a digest of it, so it
+        // is bounded per user.
+        Route::post('/web-pages/read', [WebPageController::class, 'read'])->middleware('throttle:30,1');
 
         Route::get('/generated-documents', [GeneratedDocumentController::class, 'index']);
         Route::get('/generated-documents/{message}', [GeneratedDocumentController::class, 'show']);

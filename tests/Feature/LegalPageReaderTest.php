@@ -7,6 +7,7 @@ use App\Models\CrawledPage;
 use App\Models\LegalChunk;
 use App\Models\LegalSource;
 use App\Models\User;
+use Database\Seeders\LegalSourceSeeder;
 
 beforeEach(function () {
     $this->user = User::factory()->create();
@@ -116,6 +117,23 @@ it('captures only official legal domains', function () {
         ->and(CaptureCitedLegalPage::shouldCapture('https://evil.example.com/malware'))->toBeFalse()
         ->and(CaptureCitedLegalPage::shouldCapture('http://169.254.169.254/latest/meta-data/'))->toBeFalse()
         ->and(CaptureCitedLegalPage::shouldCapture('not-a-url'))->toBeFalse();
+});
+
+it('captures pages from the other official publishers, and every allowed host has a source that owns it', function () {
+    expect(CaptureCitedLegalPage::shouldCapture('https://www.senate.gov.ph/republic_acts/ra%209653.pdf'))->toBeTrue()
+        ->and(CaptureCitedLegalPage::shouldCapture('https://ca.judiciary.gov.ph/decisions/1'))->toBeTrue()
+        ->and(CaptureCitedLegalPage::shouldCapture('https://www.dole.gov.ph/issuances/da-1'))->toBeTrue();
+
+    $this->seed(LegalSourceSeeder::class);
+
+    // A host with no owning source is skipped by the capture job, so the
+    // allowlist and the seeded sources have to stay in step.
+    foreach (CaptureCitedLegalPage::allowedHosts() as $host) {
+        expect(LegalSource::query()->whereIn('base_domain', [$host, preg_replace('/^www\./', '', $host)])->exists())
+            ->toBeTrue("No legal source owns {$host}");
+    }
+
+    expect(LegalSource::query()->where('base_domain', 'dole.gov.ph')->value('is_active'))->toBeFalse();
 });
 
 it('does not capture a page already in the knowledge base', function () {

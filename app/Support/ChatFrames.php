@@ -105,14 +105,26 @@ final class ChatFrames
             return null;
         }
 
-        return ['name' => $tool, 'count' => self::countItems($result)];
+        $decoded = self::decodeResult($result);
+
+        // A tool that reports failure or returns something unreadable must not
+        // be shown as a success receipt. Python's `rendered_result` applies the
+        // same rule, and the shared SSE corpus pins both to it.
+        if ($decoded === null || ($decoded['ok'] ?? null) === false) {
+            return null;
+        }
+
+        $items = $decoded['items'] ?? null;
+
+        return ['name' => $tool, 'count' => is_array($items) ? count($items) : null];
     }
 
     /**
-     * How many items a tool reported creating, or null when its return value
-     * does not say. Never throws and never surfaces the payload itself.
+     * The decoded tool return, or null when it is not a JSON object at all.
+     *
+     * @return array<string, mixed>|null
      */
-    private static function countItems(mixed $result): ?int
+    private static function decodeResult(mixed $result): ?array
     {
         if (! is_string($result)) {
             return null;
@@ -120,8 +132,6 @@ final class ChatFrames
 
         $decoded = json_decode($result, true);
 
-        return is_array($decoded) && is_array($decoded['items'] ?? null)
-            ? count($decoded['items'])
-            : null;
+        return is_array($decoded) ? $decoded : null;
     }
 }

@@ -77,7 +77,8 @@ it('runs the search on the configured flash model', function () {
 
 it('hands the model the page each source actually is', function () {
     Http::fake([
-        'vertexaisearch.cloud.google.com/*' => Http::response(
+        'vertexaisearch.cloud.google.com/*' => Http::response('', 302, ['Location' => 'https://elibrary.judiciary.gov.ph/showdocs/186204']),
+        'elibrary.judiciary.gov.ph/*' => Http::response(
             '<html><head><title>G.R. No. 186204 - Spouses Javier v. Spouses De Guzman</title></head></html>',
         ),
     ]);
@@ -214,4 +215,28 @@ it('persists the delegated tool sources onto the message', function () {
     expect($chat->extractWebCitations($response))->toBe([
         ['url' => 'https://lawphil.net/ra-6657', 'title' => 'RA 6657'],
     ]);
+});
+
+it('never hands back an image or an unresolvable redirect as a source', function () {
+    Http::fake(['*' => Http::response('unreachable', 503)]);
+
+    WebResearchAgent::fake([
+        fakeSearch('Findings.', [
+            ['https://example.com/uploads/social-card.webp', 'example.com'],
+            ['https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ', 'judiciary.gov.ph'],
+            ['https://lawphil.net/ra-6657', 'RA 6657'],
+        ]),
+    ]);
+
+    $collector = new WebSearchCollector;
+
+    $result = json_decode(
+        (new WebSearchTool($collector))->handle(new Request(['query' => 'RA 6657 coverage'])),
+        true,
+    );
+
+    expect($result['sources'])->toHaveCount(1)
+        ->and($result['sources'][0]['url'])->toBe('https://lawphil.net/ra-6657')
+        ->and($result['sources'][0]['cite_as'])->toBe('[Web 1]')
+        ->and($collector->count())->toBe(1);
 });

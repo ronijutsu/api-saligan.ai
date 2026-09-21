@@ -62,8 +62,8 @@ class PlanFactory extends Factory
             'is_active' => false,
             'limits' => [
                 'active_cases' => null,
-                'documents_uploaded' => 12,
-                'messages_used' => 60,
+                'documents_uploaded' => 5,
+                'messages_used' => 30,
             ],
             'features' => [
                 PlanFeatures::DRAFTING,

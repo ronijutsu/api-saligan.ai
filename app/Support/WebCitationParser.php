@@ -39,7 +39,7 @@ final class WebCitationParser
 
             $url = $citation->url ?? null;
 
-            if (! is_string($url) || $url === '') {
+            if (! is_string($url) || $url === '' || WebSourceResolver::isAsset($url)) {
                 continue;
             }
 
@@ -64,7 +64,7 @@ final class WebCitationParser
         if ($event instanceof Citation) {
             $url = $event->citation->url ?? null;
 
-            if (! is_string($url) || $url === '') {
+            if (! is_string($url) || $url === '' || WebSourceResolver::isAsset($url)) {
                 return [];
             }
 
@@ -80,7 +80,7 @@ final class WebCitationParser
             foreach ($event->data['search_results'] ?? [] as $result) {
                 $url = $result['url'] ?? null;
 
-                if (! is_string($url) || $url === '') {
+                if (! is_string($url) || $url === '' || WebSourceResolver::isAsset($url)) {
                     continue;
                 }
 

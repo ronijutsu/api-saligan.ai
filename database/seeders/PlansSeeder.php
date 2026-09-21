@@ -77,20 +77,22 @@ class PlansSeeder extends Seeder
                 'seat_price' => null,
                 'sort_order' => 0,
                 'is_active' => false,
-                // Enough to run a real matter end to end and see cited
-                // The $130 spend cap (₱2 × 65 FX) binds about as early as the
-                // message cap on the base model; either one ending the trial is
-                // correct.
+                // Enough to try the full flow — a PDF plus a few companions —
+                // and 30 answers on the base model. Either cap ending the trial
+                // is correct; the $0.52 budget binds at about the same point.
                 'limits' => [
                     'active_cases' => null,
-                    'documents_uploaded' => 12,
-                    'messages_used' => 60,
+                    'documents_uploaded' => 5,
+                    'messages_used' => 30,
                 ],
-                // Free users can draft and export Word, but PDFs are a paid
-                // document capability and are refused at every file boundary.
+                // Trial users get the full filing flow on a small allowance:
+                // 5 documents and 30 messages on a $0.52 AI budget. The
+                // documents_uploaded cap (enforced in AiBudget::reserve) is the
+                // abuse guard, so PDFs ride along instead of being refused.
                 'features' => [
                     PlanFeatures::DRAFTING,
                     PlanFeatures::EXPORTS,
+                    PlanFeatures::PDF_DOCUMENTS,
                     PlanFeatures::WEB_SEARCH,
                 ],
             ],

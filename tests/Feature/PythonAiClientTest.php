@@ -3,6 +3,7 @@
 use App\Models\Conversation;
 use App\Models\Document;
 use App\Models\Label;
+use App\Models\Message;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
@@ -14,6 +15,7 @@ use App\Services\Documents\ImageOcrExtractor;
 use App\Services\LetterDrafts\LetterDraftService;
 use App\Services\TextRewrite\TextRewriteService;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -32,14 +34,73 @@ it('streams bytes from the Python service with internal authentication', functio
     Http::fake(['ai-provider.test/*' => Http::response($sse, 200)]);
 
     $conversationId = (string) Str::uuid();
+    $requestId = (string) Str::uuid();
     $client = app(PythonAiClient::class);
-    $response = $client->streamChat($conversationId, 'Hello', [], false, false);
+    $response = $client->streamChat($conversationId, 'Hello', [], false, false, null, $requestId);
     $body = implode('', iterator_to_array($client->body($response)));
 
     expect($body)->toBe($sse);
     Http::assertSent(fn (Request $request): bool => $request->url() === "http://ai-provider.test/chat/{$conversationId}/stream"
         && $request->hasHeader('Authorization', 'Bearer shared-secret')
-        && $request['message'] === 'Hello');
+        && $request['message'] === 'Hello'
+        && $request['request_id'] === $requestId);
+});
+
+it('replays a completed request id without starting Python again', function () {
+    $requestId = (string) Str::uuid();
+    $user = User::factory()->create();
+    Subscription::factory()->for($user)->create([
+        'plan_id' => Plan::factory()->pro()->create()->id,
+    ]);
+    $conversation = Conversation::factory()->for($user)->create();
+    Message::factory()->for($conversation)->create([
+        'id' => $requestId,
+        'role' => 'assistant',
+        'content' => 'Already saved.',
+    ]);
+
+    Http::fake();
+
+    $body = $this->signInAs($user)
+        ->post("/api/conversations/{$conversation->id}/messages", [
+            'message' => 'Answer this again.',
+            'request_id' => $requestId,
+        ])
+        ->assertOk()
+        ->streamedContent();
+
+    expect($body)
+        ->toContain('event: done')
+        ->toContain('"message_id":"'.$requestId.'"');
+    Http::assertNothingSent();
+});
+
+it('rejects an in-flight duplicate request id without reserving another turn', function () {
+    config(['cache.default' => 'array']);
+    $requestId = (string) Str::uuid();
+    $user = User::factory()->create();
+    Subscription::factory()->for($user)->create([
+        'plan_id' => Plan::factory()->pro()->create()->id,
+    ]);
+    $conversation = Conversation::factory()->for($user)->create();
+    $lock = Cache::lock("chat.turn.{$conversation->id}.{$requestId}", 900);
+    expect($lock->get())->toBeTrue();
+
+    try {
+        Http::fake();
+
+        $this->signInAs($user)
+            ->postJson("/api/conversations/{$conversation->id}/messages", [
+                'message' => 'Answer this while another request is running.',
+                'request_id' => $requestId,
+            ])
+            ->assertStatus(409)
+            ->assertJsonPath('request_id', $requestId);
+
+        Http::assertNothingSent();
+    } finally {
+        $lock->release();
+    }
 });
 
 it('uses the Python stream behind the chat feature flag without changing SSE bytes', function () {

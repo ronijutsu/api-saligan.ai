@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /*
@@ -17,6 +18,22 @@ use Tests\TestCase;
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');
+
+/*
+|--------------------------------------------------------------------------
+| Outbound HTTP
+|--------------------------------------------------------------------------
+|
+| A stubbed request map only stubs the URLs it names; every other request is
+| sent for real. In CI those hosts do not resolve, so an unstubbed call fails
+| in the pipeline with a transport error instead of a useful assertion. Fail
+| fast and locally instead: every Feature test must declare the hosts it uses.
+|
+*/
+
+beforeEach(function () {
+    Http::preventStrayRequests();
+})->in('Feature');
 
 pest()->extend(TestCase::class)
     ->in('Unit/ResendMailerTest.php');

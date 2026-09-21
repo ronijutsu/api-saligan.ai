@@ -61,6 +61,10 @@ it('records the attached documents on the user message', function () {
 
     Http::fake([
         '*/api/embed' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
+        // The chat turn embeds its query through the Python provider, so that
+        // endpoint has to be stubbed too; unmatched requests otherwise reach
+        // the network and fail on an unresolvable host.
+        '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 1.0)]], 200),
     ]);
 
     LegalChatAgent::fake();
@@ -86,6 +90,11 @@ it('records the attached documents on the user message', function () {
 });
 
 it('drops attachment ids that do not belong to the sender', function () {
+    // This contract exercises the Laravel controller's native branch. The
+    // application defaults to the Python engine, so make the harness explicit
+    // before replacing the native ChatService with the recording double.
+    config(['saligan.chat.engine' => 'laravel']);
+
     $fake = fakeChatServiceRecordingAttachments();
     $this->app->instance(ChatService::class, $fake);
 

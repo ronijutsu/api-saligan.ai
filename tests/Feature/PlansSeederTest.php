@@ -175,6 +175,7 @@ it('publishes CRM in the plan catalogue and every paid plan', function () {
         ->assertJsonPath('data.0.features', [
             PlanFeatures::DRAFTING,
             PlanFeatures::EXPORTS,
+            PlanFeatures::PDF_DOCUMENTS,
             PlanFeatures::WEB_SEARCH,
         ]);
 });
@@ -188,21 +189,21 @@ it('seeds the free trial plan small and unsold', function () {
     $trial = Plan::where('slug', Plan::SLUG_TRIAL)->firstOrFail();
     $standard = Plan::where('slug', Plan::SLUG_STANDARD)->firstOrFail();
 
-    // Explicit small numbers, not a quarter of anything: 10% of Standard's
-    // $5.15 allowance, rounded up to $0.52.
+    // Explicit small numbers: 5 documents and 30 messages on 10% of
+    // Standard's $5.15 allowance, rounded up to $0.52.
     expect($trial->limits['active_cases'])->toBeNull()
-        ->and($trial->limits['documents_uploaded'])->toBe(12)
-        ->and($trial->limits['messages_used'])->toBe(60)
+        ->and($trial->limits['documents_uploaded'])->toBe(5)
+        ->and($trial->limits['messages_used'])->toBe(30)
         ->and($trial->ai_budget_usd_cents)->toBe(52)
         ->and($trial->ai_usage_multiplier)->toBeNull();
 
-    // Free and hidden from paid pricing: the registration selector requests it
-    // explicitly, while checkout and gateways still cannot sell it.
+    // Free but filing: the trial carries PDFs on a 12-document cap, hidden
+    // from paid pricing while checkout and gateways still cannot sell it.
     expect($trial->price)->toBe(0)
         ->and($trial->is_active)->toBeFalse()
         ->and($trial->paymongo_plan_id)->toBeNull()
         ->and($trial->paymongo_plan_id_annual)->toBeNull()
-        ->and($trial->features)->not->toContain(PlanFeatures::PDF_DOCUMENTS)
+        ->and($trial->features)->toContain(PlanFeatures::PDF_DOCUMENTS)
         ->and($standard->features)->toContain(PlanFeatures::PDF_DOCUMENTS);
     expect($trial->features)->not->toContain(PlanFeatures::CRM);
 });
