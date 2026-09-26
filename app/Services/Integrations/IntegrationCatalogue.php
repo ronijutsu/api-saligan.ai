@@ -238,7 +238,10 @@ class IntegrationCatalogue
                 'description' => 'Track matters and cases against a SharePoint list.',
                 'data_access' => 'Reads the SharePoint lists you connect.',
                 'scopes' => ['Sites.Read.All'],
-                'sync_mode' => 'webhook',
+                // Graph pushes changes only for one specific list
+                // (/sites/{site-id}/lists/{list-id}), never a site's whole
+                // list collection, so this polls until a list is bound.
+                'sync_mode' => 'scheduled',
             ],
             [
                 'key' => 'onedrive_access',

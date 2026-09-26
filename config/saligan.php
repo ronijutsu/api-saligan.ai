@@ -329,6 +329,24 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Welcome email sequence
+    |--------------------------------------------------------------------------
+    |
+    | Five onboarding emails over a trial's first nine days (App\Services\
+    | Lifecycle\WelcomeSequence). Off by default so deploying it cannot email
+    | the existing user base by surprise; `since` (a date) limits it to trials
+    | started on or after that day.
+    |
+    */
+
+    'welcome_sequence' => [
+        'enabled' => (bool) env('WELCOME_SEQUENCE_ENABLED', false),
+        'since' => env('WELCOME_SEQUENCE_SINCE'),
+        'signature' => env('WELCOME_SEQUENCE_SIGNATURE', 'The Batayan team'),
+    ],
+
     'reminders' => [
         'lead_days' => (int) env('DEADLINE_REMINDER_LEAD_DAYS', 3),
     ],

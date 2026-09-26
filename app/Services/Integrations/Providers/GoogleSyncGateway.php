@@ -3,6 +3,7 @@
 namespace App\Services\Integrations\Providers;
 
 use App\Models\Integration;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -44,7 +45,7 @@ class GoogleSyncGateway implements ProviderSyncGateway
 
         if ($pageToken === null) {
             $start = Http::withToken($accessToken)
-                ->get('https://www.googleapis.com/drive/v3/changes/startPageToken')
+                ->get('https://www.googleapis.com/drive/v3/changes/startPageToken', ['supportsAllDrives' => 'true'])
                 ->throw()
                 ->json('startPageToken');
 
@@ -57,7 +58,11 @@ class GoogleSyncGateway implements ProviderSyncGateway
             ->get('https://www.googleapis.com/drive/v3/changes', [
                 'pageToken' => $pageToken,
                 'pageSize' => 100,
-                'fields' => 'newStartPageToken,nextPageToken,changes(id)',
+                // Without these, files in shared drives never appear in the
+                // feed (Drive defaults both to false).
+                'supportsAllDrives' => 'true',
+                'includeItemsFromAllDrives' => 'true',
+                'fields' => 'newStartPageToken,nextPageToken,changes(fileId,removed,time)',
             ])
             ->throw();
 
@@ -83,14 +88,17 @@ class GoogleSyncGateway implements ProviderSyncGateway
     {
         $state = $integration->capabilityState($capability);
 
-        $params = ['maxResults' => 50, 'singleEvents' => 'true'];
+        $params = ['maxResults' => 250, 'singleEvents' => 'true', 'showDeleted' => 'true'];
 
         if ($state['last_synced_at'] !== null) {
-            $params['updatedMin'] = $state['last_synced_at'];
+            // RFC 3339, as events.list requires.
+            $params['updatedMin'] = Carbon::parse($state['last_synced_at'])->utc()->toRfc3339String();
         }
 
+        // `primary` is the signed-in user's main calendar; there is no
+        // user-level events collection in Calendar v3.
         $response = Http::withToken($accessToken)
-            ->get('https://www.googleapis.com/calendar/v3/users/me/events', $params)
+            ->get('https://www.googleapis.com/calendar/v3/calendars/primary/events', $params)
             ->throw();
 
         $changed = count($response->json('items', []));
@@ -111,8 +119,10 @@ class GoogleSyncGateway implements ProviderSyncGateway
     {
         $state = $integration->capabilityState($capability);
 
+        // Gmail's `after:` accepts a Unix timestamp, so a repeat sync picks up
+        // exactly where the last one ended instead of a fixed day window.
         $query = $state['last_synced_at'] !== null
-            ? 'after:'.now()->subDay()->format('Y/m/d')
+            ? 'after:'.Carbon::parse($state['last_synced_at'])->getTimestamp()
             : 'newer_than:1d';
 
         $response = Http::withToken($accessToken)

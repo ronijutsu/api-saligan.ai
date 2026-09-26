@@ -10,6 +10,7 @@ use App\Models\Integration;
 use App\Models\Organization;
 use App\Models\User;
 use App\Services\Integrations\IntegrationAdminService;
+use App\Services\Integrations\IntegrationCatalogue;
 use App\Services\Integrations\IntegrationEligibility;
 use App\Services\Integrations\IntegrationManager;
 use App\Services\Integrations\IntegrationSyncService;
@@ -274,35 +275,38 @@ class IntegrationController extends Controller
      */
     public function googleWebhook(Request $request): JsonResponse
     {
-        $channelId = (string) ($request->header('X-Goog-Channel-ID') ?? $request->json('channelId', ''));
+        // Google push notifications have an empty body; everything is in the
+        // X-Goog-* headers.
+        $channelId = (string) $request->header('X-Goog-Channel-ID', '');
+        $resourceState = (string) $request->header('X-Goog-Resource-State', '');
 
-        // Channel closed on the provider side; nothing to sync.
-        if ($request->json('resourceState') === 'not_exists') {
+        // `sync` is the handshake sent right after a channel is created, and
+        // `not_exists` means the watched resource is gone; neither is a change.
+        if ($channelId === '' || in_array($resourceState, ['sync', 'not_exists'], true)) {
             return response()->json(['status' => 'ok']);
         }
 
-        $parts = explode(':', $channelId);
-
-        // Shape: batayan:{integration_id}:{capability}:{random}
-        if (count($parts) !== 4 || $parts[0] !== 'batayan') {
-            return response()->json(['status' => 'ignored'], 200);
-        }
-
-        [, $integrationId, $capability] = $parts;
-
-        $integration = Integration::query()->find($integrationId);
+        $integration = $this->findByCapabilityState('webhook_channel_id', $channelId);
 
         if ($integration === null || ! $integration->isConnected()) {
             return response()->json(['status' => 'ignored'], 200);
         }
 
-        $state = $integration->capabilityState($capability);
+        foreach (array_keys(IntegrationCatalogue::capabilities($integration->provider)) as $capability) {
+            $state = $integration->capabilityState($capability);
 
-        if (($state['webhook_channel_id'] ?? null) !== $channelId) {
-            return response()->json(['status' => 'ignored'], 200);
+            if (($state['webhook_channel_id'] ?? null) !== $channelId) {
+                continue;
+            }
+
+            // The token set at registration comes back on every genuine
+            // notification; a caller that only guessed the channel id lacks it.
+            if (! hash_equals((string) ($state['webhook_token'] ?? ''), (string) $request->header('X-Goog-Channel-Token', ''))) {
+                return response()->json(['status' => 'ignored'], 200);
+            }
+
+            SyncIntegrationCapability::dispatch($integration->id, $capability);
         }
-
-        SyncIntegrationCapability::dispatch($integration->id, $capability);
 
         return response()->json(['status' => 'ok']);
     }
@@ -327,7 +331,7 @@ class IntegrationController extends Controller
                 continue;
             }
 
-            $integration = $this->findByGraphSubscription($subscriptionId);
+            $integration = $this->findByCapabilityState('webhook_subscription_id', $subscriptionId);
 
             if ($integration === null || ! $integration->isConnected()) {
                 continue;
@@ -340,7 +344,9 @@ class IntegrationController extends Controller
                     continue;
                 }
 
-                if ($clientState !== null && ($state['webhook_client_state'] ?? null) !== $clientState) {
+                // Graph always echoes the clientState set at registration; a
+                // missing or different one means the call didn't come from Graph.
+                if (! hash_equals((string) ($state['webhook_client_state'] ?? ''), (string) $clientState)) {
                     continue;
                 }
 
@@ -348,16 +354,24 @@ class IntegrationController extends Controller
             }
         }
 
-        return response()->json(['status' => 'ok']);
+        // 202: the work is queued, not done — what Graph recommends when
+        // processing happens after the response.
+        return response()->json(['status' => 'accepted'], 202);
     }
 
     /**
-     * The integration holding a given Graph subscription id.
+     * The integration whose capability state holds `$key => $value` — a Graph
+     * subscription id or a Google channel id. `capabilities` is a json
+     * column keyed by capability, so each entry is checked with json_each
+     * (a LIKE over a json column is not valid on Postgres).
      */
-    protected function findByGraphSubscription(string $subscriptionId): ?Integration
+    protected function findByCapabilityState(string $key, string $value): ?Integration
     {
         return Integration::query()
-            ->where('capabilities', 'like', '%"webhook_subscription_id":"'.addslashes($subscriptionId).'"%')
+            ->whereRaw(
+                'exists (select 1 from json_each(integrations.capabilities) as c(key, value) where c.value->>? = ?)',
+                [$key, $value],
+            )
             ->first();
     }
 
