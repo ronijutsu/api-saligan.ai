@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DemoRequestController;
 use App\Http\Controllers\Api\DocumentController;
+use App\Http\Controllers\Api\EmailPreferenceController;
 use App\Http\Controllers\Api\ExportController;
 use App\Http\Controllers\Api\FeedbackController;
 use App\Http\Controllers\Api\GeneratedDocumentController;
@@ -97,6 +98,13 @@ Route::get('/terms/document', [TermsController::class, 'document']);
 Route::get('/organizations/{organization}/logo', [OrganizationController::class, 'logo'])
     ->middleware('signed')
     ->name('organizations.logo');
+
+// The unsubscribe link in lifecycle emails, and the one-click POST that mail
+// clients send (RFC 8058). Recipients are rarely logged in when they click, so
+// the signature on the URL is the authorization, as with the logo route.
+Route::match(['get', 'post'], '/email/unsubscribe/{user}', [EmailPreferenceController::class, 'unsubscribe'])
+    ->middleware('signed')
+    ->name('email.unsubscribe');
 
 // The OAuth landing for add-on integrations. The provider returns the browser
 // here with a code and an encrypted, expiry-stamped state; no bearer token

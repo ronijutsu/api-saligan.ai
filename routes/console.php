@@ -23,6 +23,16 @@ Schedule::command('trials:warn')
     ->withoutOverlapping()
     ->onOneServer();
 
+// Welcome sequence for trial users. Hourly so the day-0 email lands soon after
+// signup, but only between 00:00 and 12:00 UTC (08:00–20:00 in the
+// Philippines) so nobody is emailed at 3 a.m. The service spaces emails at
+// least 20 hours apart and records every step, so repeated ticks are safe.
+Schedule::command('emails:welcome-sequence')
+    ->hourly()
+    ->between('00:00', '12:00')
+    ->withoutOverlapping()
+    ->onOneServer();
+
 // Closed cases get a 30-day grace period before they move to the archive; a
 // once-daily sweep keeps that promise without chasing exact timestamps.
 Schedule::command('cases:archive-closed')

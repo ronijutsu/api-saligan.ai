@@ -23,6 +23,7 @@ class IntegrationManager
         protected readonly OAuthStateStore $states,
         protected readonly IntegrationAuditLogger $audit,
         protected readonly IntegrationEligibility $eligibility,
+        protected readonly WebhookRegistrar $webhooks,
     ) {
         //
     }
@@ -90,6 +91,7 @@ class IntegrationManager
                 IntegrationCatalogue::baseScopes($provider),
                 $state,
                 $this->redirectUri(),
+                $this->states->codeChallenge($state),
             ),
             'privacy_summary' => $this->privacySummary($provider),
         ];
@@ -128,6 +130,7 @@ class IntegrationManager
                 $scopes,
                 $state,
                 $this->redirectUri(),
+                $this->states->codeChallenge($state),
             ),
             'privacy_summary' => $this->privacySummary($integration->provider, [$capability]),
         ];
@@ -158,6 +161,7 @@ class IntegrationManager
                 $scopes,
                 $state,
                 $this->redirectUri(),
+                $this->states->codeChallenge($state),
             ),
         ];
     }
@@ -179,7 +183,7 @@ class IntegrationManager
         $this->eligibility->ensureEligible($user);
 
         $provider = $payload['provider'];
-        $tokens = $this->clients->for($provider)->exchangeCode($code, $this->redirectUri());
+        $tokens = $this->clients->for($provider)->exchangeCode($code, $this->redirectUri(), $payload['code_verifier'] ?? null);
         $account = $this->clients->for($provider)->accountInfo($tokens['access_token']);
 
         $integration = $this->upsertConnection($user, $provider, $tokens, $account);
@@ -196,6 +200,21 @@ class IntegrationManager
         );
 
         if ($payload['purpose'] === OAuthStateStore::PURPOSE_ENABLE_CAPABILITY && $payload['capability'] !== null) {
+            // Google's granular consent lets the user untick individual
+            // scopes, so a completed round-trip doesn't prove the capability's
+            // scopes were granted. Only switch it on when they were.
+            $definition = IntegrationCatalogue::capability($provider, $payload['capability']);
+            $missing = array_values(array_diff($definition['scopes'] ?? [], $integration->granted_scopes ?? []));
+
+            if ($missing !== []) {
+                $integration->updateCapabilityState($payload['capability'], [
+                    'enabled' => false,
+                    'last_error' => 'The permission this feature needs was not granted. Turn it on again and allow access.',
+                ]);
+
+                return $integration;
+            }
+
             $this->enableCapability($integration, $payload['capability']);
 
             $this->audit->logFromRequest(
@@ -256,6 +275,10 @@ class IntegrationManager
         $this->assertCanManage($user, $integration);
 
         $client = $this->clients->for($provider);
+
+        // Stop push channels first, while the token still works; otherwise
+        // the provider keeps notifying an endpoint that will ignore it.
+        $this->webhooks->unsubscribeAll($integration);
 
         // Best-effort: a provider that refuses revocation must not trap the
         // user in a connection they are trying to leave.
@@ -466,6 +489,7 @@ class IntegrationManager
             $remaining,
             $state,
             $this->redirectUri(),
+            $this->states->codeChallenge($state),
         );
 
         $this->audit->logFromRequest(
@@ -498,6 +522,8 @@ class IntegrationManager
      */
     protected function disableCapability(Integration $integration, string $capability): void
     {
+        $this->webhooks->unsubscribe($integration, $capability);
+
         $integration->updateCapabilityState($capability, [
             'enabled' => false,
             'sync_status' => 'idle',
