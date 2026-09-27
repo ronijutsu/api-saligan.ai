@@ -56,107 +56,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Chat configuration
-    |--------------------------------------------------------------------------
-    |
-    | Provider names reference providers defined in config/ai.php.
-    |
-    */
-
-    'chat' => [
-        // Python is the default: every AI call belongs in the ai-provider
-        // service, and Laravel's in-process engine is the opt-in fallback
-        // (`AI_CHAT_ENGINE=laravel`). Defaulting the other way meant a
-        // deployment that never set the variable quietly ran the old engine.
-        'engine' => env('AI_CHAT_ENGINE', 'python'),
-        'provider' => env('AI_CHAT_PROVIDER', 'anthropic'),
-        'ollama_model' => env('OLLAMA_CHAT_MODEL', 'qwen3.6:latest'),
-        'ollama_model_alt' => env('OLLAMA_CHAT_MODEL_ALT', 'qwen3.5:latest'),
-
-        /*
-         * Context window requested from Ollama, in tokens.
-         *
-         * Ollama defaults num_ctx to 4096 and silently truncates anything
-         * longer, keeping only the TAIL of the prompt. A drafting turn sends
-         * roughly 23k tokens — persona and drafting rules, the uploaded
-         * template body and its placeholders, matter memory, then retrieved
-         * context — so at the default the model read about 2k tokens and every
-         * instruction that makes template drafting work was discarded before
-         * it ever saw them. It answered from the leftover tail and never
-         * called fill_template_fields, so no document was produced.
-         *
-         * Raise this and the whole prompt survives. The cost is KV-cache
-         * memory on the Ollama host and prompt-eval time, so it is tunable:
-         * lower it if the host runs out of VRAM, but never below the size of a
-         * drafting prompt or the truncation returns silently.
-         */
-        'ollama_num_ctx' => (int) env('OLLAMA_NUM_CTX', 32768),
-
-        /*
-         * Per-request timeout for a chat step, in seconds.
-         *
-         * laravel/ai falls back to 60s when the agent names no timeout, and
-         * Guzzle applies that as an IDLE timeout on the response stream. A
-         * local model reading a ~23k-token drafting prompt emits nothing at
-         * all while it works — measured at ~163s on the dev box — so the read
-         * expired long before the first token and surfaced as Guzzle's
-         * misleading "Connection refused for URI", with no reply persisted.
-         *
-         * Hosted providers answer in a few seconds and never approach this;
-         * it exists for slow local inference.
-         */
-        'timeout' => (int) env('AI_CHAT_TIMEOUT', 300),
-        'gemini_model' => env('GEMINI_CHAT_MODEL', 'gemini-3.6-flash'),
-        'openai_model' => env('OPENAI_CHAT_MODEL', 'gpt-4o'),
-        'anthropic_model' => env('ANTHROPIC_CHAT_MODEL', 'claude-sonnet-5'),
-        'meta_model' => env('META_CHAT_MODEL', 'muse-spark-1.1'),
-
-        /*
-         * OpenRouter is an OpenAI-compatible aggregator with namespaced model
-         * ids. The default is its free-only router: switching a deployment to
-         * OpenRouter without pinning a model must not start spending. Note that
-         * "openrouter/auto:free" does NOT restrict the Auto Router to free
-         * models — openrouter/free is the zero-cost slug.
-         */
-        'openrouter_model' => env('OPENROUTER_CHAT_MODEL', 'openrouter/free'),
-
-        /*
-         * The Anthropic model served to plans without the `frontier_model`
-         * feature — the free trial and Standard. Haiku 4.5 costs half of
-         * Sonnet 5 per message at our measured token sizes (₱1.75 against
-         * ₱3.49; see EarningsModel), and that halving is what pays for
-         * Standard's message allowance and for giving trials away at all.
-         *
-         * Both models answer from the same retrieved sources, so this changes
-         * how much deliberation a message buys, never what it can reach. Set
-         * it to the same value as `anthropic_model` (or leave it empty) to
-         * serve everyone the frontier model — but note that Standard's
-         * allowance is priced on the assumption that it is not.
-         *
-         * Note that Haiku 4.5 rejects `output_config.effort` outright, so the
-         * effort setting below is omitted for it; see LegalChatAgent.
-         */
-        'anthropic_base_model' => env('ANTHROPIC_BASE_CHAT_MODEL', 'claude-haiku-4-5'),
-
-        /*
-         * How hard the model works before answering: low | medium | high |
-         * xhigh | max.
-         *
-         * Claude Sonnet 5 defaults to `high`, which was never set here and so
-         * was never chosen — every answer was paying for the most deliberate
-         * setting. Retrieval has already done the source-finding by the time
-         * the model runs, so `medium` returns the first token noticeably
-         * sooner while holding answer quality. Raise it if citation accuracy
-         * suffers; drop to `low` for a faster, chattier feel.
-         *
-         * Only applies to models that accept it. Haiku 4.5 does not, and a
-         * request that sends it anyway is rejected with a 400.
-         */
-        'effort' => env('ANTHROPIC_CHAT_EFFORT', 'medium'),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
     | Python AI provider
     |--------------------------------------------------------------------------
     |
@@ -168,10 +67,6 @@ return [
     'ai_provider' => [
         'url' => env('AI_PROVIDER_URL', 'http://127.0.0.1:8080'),
         'internal_secret' => env('AI_INTERNAL_SECRET'),
-        // Same default, same reason: OCR, classification, rewrites, embeddings,
-        // letters and digests all run in ai-provider unless explicitly told
-        // otherwise with AI_BATCH_ENGINE=laravel.
-        'batch_engine' => env('AI_BATCH_ENGINE', 'python'),
         'connect_timeout' => (int) env('AI_PROVIDER_CONNECT_TIMEOUT', 5),
         'timeout' => (int) env('AI_PROVIDER_TIMEOUT', 300),
     ],
@@ -204,101 +99,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Context caching
+    | Web search budget
     |--------------------------------------------------------------------------
     |
-    | Gates both providers' prompt caching for the static system prompt.
-    |
-    | Gemini: the static system prompt (persona + standing instructions) is
-    | cached as a CachedContent resource so subsequent chat turns bill those
-    | tokens at the reduced cached-input rate. The cached prefix is referenced
-    | by name via the generateContent "cachedContent" field; dynamic per-turn
-    | instructions (export, case, template, retrieved context) are appended
-    | after it.
-    |
-    | Anthropic: the static system prompt is sent as its own system block with
-    | a "cache_control" breakpoint, using the same ttl_seconds as Gemini —
-    | an hour when it is 3600 or more, otherwise Anthropic's five-minute
-    | default. The block is identical on every request and carries no per-user
-    | text, so one cache entry serves every tenant and is read at 0.1x the
-    | input rate on every subsequent turn.
-    |
-    */
-
-    'context_caching' => [
-        'enabled' => (bool) env('GEMINI_CONTEXT_CACHING', true),
-        'ttl_seconds' => (int) env('GEMINI_CONTEXT_CACHE_TTL', 3600),
-        'refresh_seconds' => (int) env('GEMINI_CONTEXT_CACHE_REFRESH', 3000),
-        // How long to wait when (re)creating the CachedContent on the request
-        // path before giving up. Creation happens synchronously on a cache
-        // miss, so a hung call must fail fast — the caller then proceeds
-        // without cached-input pricing instead of blocking the stream start.
-        'create_timeout' => (int) env('GEMINI_CONTEXT_CACHE_CREATE_TIMEOUT', 10),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Web search
-    |--------------------------------------------------------------------------
-    |
-    | Web search is offered to the chat model on every turn: it is the primary
-    | source of law when retrieval comes back empty, and a way to verify or
-    | check for amendments when it does not.
-    |
-    | When `enabled` is on, the search does not run on the answering provider.
-    | The model calls the `web_search` tool, and the search itself is delegated
-    | to a small Gemini Flash agent with Google Search grounding, which reports
-    | the sources back for the chat model to write from. Provider-native web
-    | search is billed per query at a rate set by the answering provider rather
-    | than by the size of the model, so delegating it moves the largest
-    | non-token cost on a searching turn onto the cheapest model that can do
-    | the searching well — the answer is still written by the chat model, from
-    | the same sources.
-    |
-    | Turn it off to go back to each provider's native web search (Gemini's
-    | Google Search, OpenAI's and Anthropic's web_search tools). Note that
-    | Ollama has no native web search, so a local-model turn only has web
-    | search at all while this is enabled.
-    |
-    | `max_searches` caps the searches one answer may run: each is separately
-    | billed and separately waited on, so a model that decides to search its
-    | way through a question is stopped rather than left to run.
+    | How many web searches one answer may run, by plan: a plan carrying
+    | `deep_research` gets `max_searches`, every other plan with web search
+    | gets `base_max_searches`. Each search is separately billed and waited
+    | on, so this is a plan entitlement sent to ai-provider with every turn.
+    | Whether search is switched on for the deployment, and which model runs
+    | it, is ai-provider's setting.
     |
     */
 
     'web_search' => [
-        'enabled' => (bool) env('WEB_SEARCH_DELEGATED', true),
-        'provider' => env('WEB_SEARCH_PROVIDER', 'gemini'),
-        // Defaults to whatever Flash the chat is configured to fall back to,
-        // so the model only has to be bumped in one place.
-        'model' => env('WEB_SEARCH_MODEL', env('GEMINI_CHAT_MODEL', 'gemini-3.6-flash')),
-        'max_results' => (int) env('WEB_SEARCH_MAX_RESULTS', 6),
         'max_searches' => (int) env('WEB_SEARCH_MAX_SEARCHES', 4),
-        // What a plan without `deep_research` may run in one answer. Each
-        // search is separately billed and separately waited on, so this is the
-        // other half of the same lever as the retrieval caps above.
         'base_max_searches' => (int) env('WEB_SEARCH_BASE_MAX_SEARCHES', 2),
-        'timeout' => (int) env('WEB_SEARCH_TIMEOUT', 60),
-
-        /*
-         * Fetch each search result once to find out what page it actually is.
-         *
-         * Google Search grounding reports its sources as redirects through
-         * vertexaisearch.cloud.google.com titled with a bare domain
-         * ("lawphil.net"), or as a bare URL with no title. A card built from
-         * that names the publisher rather than the decision, and the model —
-         * which sees the same titles — has nothing to tell one result from
-         * another, so it attaches the case it is discussing to whichever
-         * source it guesses. Resolving each one gives the card the page's own
-         * title, gives the model something to check its attribution against,
-         * and stores the real URL, which is also what lets a cited authority
-         * be captured into the knowledge base.
-         *
-         * The fetches run in parallel inside the search, so the cost is one
-         * page load added to a turn that already searched.
-         */
-        'resolve_sources' => (bool) env('WEB_SEARCH_RESOLVE_SOURCES', true),
-        'resolve_timeout' => (int) env('WEB_SEARCH_RESOLVE_TIMEOUT', 6),
+        'read_timeout' => (int) env('WEB_SEARCH_READ_TIMEOUT', 10),
     ],
 
     /*
@@ -575,69 +391,6 @@ return [
                 'timeout' => (int) env('LEGAL_DIGEST_BATCH_TIMEOUT', 60),
             ],
         ],
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Intake form
-    |--------------------------------------------------------------------------
-    |
-    | When the case already carries the narrative facts, the intake form stops
-    | asking for them — the model drafts the "who, what, when, where" straight
-    | from the case context instead of making the user retype it. The
-    | thresholds below decide when a case counts as actually supplying those
-    | facts.
-    |
-    | Both are deliberately about SUBSTANCE, not presence. The check used to be
-    | `filled($case->description)`, so a three-word description ("land
-    | dispute") or a single uploaded scan of an ID suppressed the entire form —
-    | the model then had no channel left for the party names, addresses, and
-    | amounts a case description never contains, and either invented them or
-    | wrote bracketed placeholders that the export strips out.
-    |
-    | `min_description_characters` is the length at which a description reads
-    | as a narrative rather than a label. `min_document_chunks` is how much
-    | extracted text an uploaded document must yield to count as a source of
-    | facts; at the default 500-character chunk size, two chunks is roughly a
-    | page, which a photo of an ID or a receipt never reaches.
-    |
-    | Note that clearing these thresholds only drops the NARRATIVE fields from
-    | the form (see ChatService::dropCaseCoveredFields). The form itself is
-    | suppressed only when nothing whatsoever is left to ask.
-    |
-    */
-
-    'intake' => [
-        'min_description_characters' => (int) env('INTAKE_MIN_DESCRIPTION_CHARS', 60),
-        'min_document_chunks' => (int) env('INTAKE_MIN_DOCUMENT_CHUNKS', 2),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Retrieval
-    |--------------------------------------------------------------------------
-    */
-
-    /*
-     | The `max_*` caps are what a plan carrying `deep_research` retrieves; the
-     | `base_*` caps are what every other plan does. Retrieved context is the
-     | bulk of a message's input tokens (13,340 of 37,774 at the caps, per
-     | EarningsModel), so this is both the largest lever on answer quality and
-     | the largest lever on what an answer costs — which is what makes it worth
-     | selling rather than setting once for everyone.
-     |
-     | The base caps are deliberately not a token gesture: four authorities and
-     | two document passages answer most questions completely. Deep research
-     | pays for the long tail where they do not.
-     */
-    'retrieval' => [
-        'min_similarity' => (float) env('RETRIEVAL_MIN_SIMILARITY', 0.30),
-        'max_legal_chunks' => (int) env('RETRIEVAL_MAX_LEGAL_CHUNKS', 6),
-        'max_standard_chunks' => (int) env('RETRIEVAL_MAX_STANDARD_CHUNKS', 6),
-        'max_document_chunks' => (int) env('RETRIEVAL_MAX_DOCUMENT_CHUNKS', 4),
-        'base_max_legal_chunks' => (int) env('RETRIEVAL_BASE_MAX_LEGAL_CHUNKS', 4),
-        'base_max_standard_chunks' => (int) env('RETRIEVAL_BASE_MAX_STANDARD_CHUNKS', 4),
-        'base_max_document_chunks' => (int) env('RETRIEVAL_BASE_MAX_DOCUMENT_CHUNKS', 2),
     ],
 
 ];

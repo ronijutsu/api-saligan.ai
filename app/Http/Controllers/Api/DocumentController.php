@@ -160,7 +160,6 @@ class DocumentController extends Controller
             $request->user(),
             AiUsage::OPERATION_INGEST,
             AiCosting::estimateFor($isImage ? 'ingest_scan' : 'ingest_text'),
-            context: ['engine' => config('saligan.ai_provider.batch_engine')],
         );
 
         $originalFilename = $file->getClientOriginalName();
@@ -300,7 +299,6 @@ class DocumentController extends Controller
             $request->user(),
             AiUsage::OPERATION_INGEST,
             AiCosting::estimateFor(str_starts_with((string) $document->mime_type, 'image/') ? 'ingest_scan' : 'ingest_text'),
-            context: ['engine' => config('saligan.ai_provider.batch_engine')],
         );
 
         $document->update([

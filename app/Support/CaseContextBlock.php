@@ -8,9 +8,8 @@ use App\Models\LegalCase;
  * A compact block of a matter's own facts, for any prompt that needs to know
  * which case it is working on.
  *
- * Extracted from ChatService, where it was a protected method: three callers
- * now need it — the chat instructions, the letter-drafting tool, and the
- * passage rewriter in the letter editor. The rewriter was the one doing
+ * Two callers need it — the chat context sent to ai-provider, and the passage
+ * rewriter in the letter editor. The rewriter used to do
  * without: it ran entirely stateless, so "fix the grammar of this clause" was
  * answered by a model that had never seen the matter and could not tell a
  * party's name from a typo.

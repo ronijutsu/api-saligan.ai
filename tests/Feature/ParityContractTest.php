@@ -8,14 +8,14 @@ use App\Models\Template;
 use App\Models\User;
 
 /**
- * Engine parity, Laravel side: resolve the authoritative conversation context
- * for each shared scenario and prove the wire matches the corpus that the
- * Python suite consumes. See `contracts/parity/scenarios.json`.
+ * Parity, Laravel side: resolve what each shared scenario's plan buys and
+ * prove the wire matches the corpus the Python suite consumes. The model and
+ * the deployment's search switch are ai-provider's side of the same corpus.
+ * See `contracts/parity/scenarios.json`.
  */
 beforeEach(function () {
     config([
         'saligan.ai_provider.internal_secret' => 'parity-secret',
-        'saligan.chat.provider' => 'ollama',
         'saligan.web_search.base_max_searches' => 2,
         'saligan.web_search.max_searches' => 4,
     ]);
@@ -30,15 +30,13 @@ beforeEach(function () {
 });
 
 it('declares a parity corpus version', function () {
-    expect($this->corpus['version'])->toBe(1);
+    expect($this->corpus['version'])->toBe(2);
 });
 
 foreach (json_decode(file_get_contents(__DIR__.'/../fixtures/parity-scenarios.json'), true)['scenarios'] as $scenario) {
     it("resolves the authoritative context for {$scenario['id']}", function () use ($scenario) {
         $setup = $scenario['setup'];
         $expected = $scenario['expected_context'];
-
-        config(['saligan.web_search.enabled' => $setup['web_search_config_enabled']]);
 
         $user = User::factory()->create();
         $plan = Plan::factory()->create(['features' => $setup['plan_features']]);
@@ -72,7 +70,10 @@ foreach (json_decode(file_get_contents(__DIR__.'/../fixtures/parity-scenarios.js
             ->assertJsonPath('deep_research', $expected['deep_research'])
             ->assertJsonPath('web_search_enabled', $expected['web_search_enabled'])
             ->assertJsonPath('web_search_max_calls', $expected['web_search_max_calls'])
-            ->assertJsonPath('template_mode', $expected['template_mode']);
+            ->assertJsonPath('template_mode', $expected['template_mode'])
+            ->assertJsonPath('context_contract_version', 2)
+            ->assertJsonMissingPath('provider')
+            ->assertJsonMissingPath('model');
 
         if ($expected['resolved_template'] === null) {
             $response->assertJsonPath('resolved_template', null);

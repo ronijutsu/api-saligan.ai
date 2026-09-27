@@ -1,6 +1,8 @@
 <?php
 
+use App\Enums\ChatProvider;
 use App\Enums\MessageRole;
+use App\Jobs\CaptureCitedLegalPage;
 use App\Models\Advisory;
 use App\Models\Conversation;
 use App\Models\CrawledPage;
@@ -16,13 +18,13 @@ use App\Models\Todo;
 use App\Models\User;
 use App\Support\PlanFeatures;
 use App\Support\UserProfile;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
 beforeEach(function () {
     config([
         'saligan.ai_provider.internal_secret' => 'test-internal-secret',
-        'saligan.chat.provider' => 'ollama',
     ]);
 
     $this->user = User::factory()->create();
@@ -51,7 +53,10 @@ it('returns the prompt-building context', function () {
         ->getJson("/internal/conversations/{$this->conversation->id}/context")
         ->assertOk()
         ->assertJsonPath('user_id', $this->user->id)
-        ->assertJsonPath('provider', 'ollama')
+        ->assertJsonPath('context_contract_version', 2)
+        ->assertJsonPath('plan_tier', 'pro')
+        ->assertJsonMissingPath('provider')
+        ->assertJsonMissingPath('model')
         ->assertJsonPath('messages', []);
 
     expect($response->getContent())->toContain('"recent_intake_values":{}');
@@ -59,7 +64,6 @@ it('returns the prompt-building context', function () {
 
 it('sends plan capabilities and a bounded web-search budget', function () {
     config([
-        'saligan.web_search.enabled' => true,
         'saligan.web_search.base_max_searches' => 2,
         'saligan.web_search.max_searches' => 4,
     ]);
@@ -72,11 +76,9 @@ it('sends plan capabilities and a bounded web-search budget', function () {
     $this->withToken('test-internal-secret')
         ->getJson("/internal/conversations/{$this->conversation->id}/context")
         ->assertOk()
-        ->assertJsonPath('context_contract_version', 1)
         ->assertJsonPath('web_search_enabled', false)
         ->assertJsonPath('web_search_max_calls', 0)
-        ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING])
-        ->assertJsonPath('model', config('saligan.chat.ollama_model'));
+        ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING]);
 
     $searchPlan = Plan::factory()->create([
         'features' => [PlanFeatures::DRAFTING, PlanFeatures::WEB_SEARCH],
@@ -102,14 +104,6 @@ it('sends plan capabilities and a bounded web-search budget', function () {
         ->assertJsonPath('web_search_enabled', true)
         ->assertJsonPath('web_search_max_calls', 4)
         ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING, PlanFeatures::WEB_SEARCH, PlanFeatures::DEEP_RESEARCH]);
-
-    config(['saligan.web_search.enabled' => false]);
-
-    $this->withToken('test-internal-secret')
-        ->getJson("/internal/conversations/{$this->conversation->id}/context")
-        ->assertOk()
-        ->assertJsonPath('web_search_enabled', false)
-        ->assertJsonPath('web_search_max_calls', 0);
 });
 
 it('uses an explicit visible template instead of the case default', function () {
@@ -328,37 +322,48 @@ it('does not treat a user message id as an idempotent assistant callback', funct
     ])->assertStatus(409);
 });
 
-it('forwards Meta to the Python service when configured', function () {
-    // Meta is served through its OpenAI-compatible endpoint by the Python
-    // adapter, so the context must preserve the provider and configured model.
-    config([
-        'saligan.chat.provider' => 'meta',
-        'ai.providers.meta.key' => 'test-meta-key',
-        'ai.providers.gemini.key' => 'test-gemini-key',
-    ]);
+it('records the provider that answered on the conversation', function () {
+    expect($this->conversation->provider)->toBeNull();
 
-    $this->withToken('test-internal-secret')
-        ->getJson("/internal/conversations/{$this->conversation->id}/context")
-        ->assertOk()
-        ->assertJsonPath('provider', 'meta')
-        ->assertJsonPath('model', config('saligan.chat.meta_model'));
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => (string) Str::uuid(),
+        'provider' => 'openai',
+        'user' => ['content' => 'What does the law say?', 'attachment_ids' => []],
+        'assistant' => ['content' => 'It depends on the governing statute.'],
+    ])->assertOk();
+
+    expect($this->conversation->fresh()->provider)->toBe(ChatProvider::OpenAI);
 });
 
-it('forwards OpenRouter to the Python service rather than mapping it', function () {
-    // OpenRouter is served through the OpenAI-compatible client, so the context
-    // builder passes it straight through: what the operator configured is what
-    // answers, and the free-only default model is what keeps it zero-cost.
-    config([
-        'saligan.chat.provider' => 'openrouter',
-        'ai.providers.openrouter.key' => 'test-openrouter-key',
-        'saligan.chat.openrouter_model' => 'openrouter/free',
-    ]);
+it('queues a capture for each official page the answer cited', function () {
+    Queue::fake();
 
-    $this->withToken('test-internal-secret')
-        ->getJson("/internal/conversations/{$this->conversation->id}/context")
+    $payload = [
+        'message_id' => (string) Str::uuid(),
+        'provider' => 'gemini',
+        'user' => ['content' => 'What does the law say?', 'attachment_ids' => []],
+        'assistant' => ['content' => 'See the decision [Web 1].'],
+        'metadata' => [
+            'web_citations' => [
+                ['url' => 'https://lawphil.net/judjuris/juri2020/jan2020/gr_123_2020.html', 'title' => 'G.R. No. 123'],
+                ['url' => 'https://example.com/blog/post', 'title' => 'A blog'],
+            ],
+        ],
+    ];
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", $payload)
         ->assertOk()
-        ->assertJsonPath('provider', 'openrouter')
-        ->assertJsonPath('model', 'openrouter/free');
+        ->assertJsonMissingPath('web_citations');
+
+    // A retried callback is idempotent and must not queue the capture twice.
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", $payload)
+        ->assertOk();
+
+    Queue::assertPushed(CaptureCitedLegalPage::class, 1);
+    Queue::assertPushed(
+        CaptureCitedLegalPage::class,
+        fn (CaptureCitedLegalPage $job): bool => $job->url === 'https://lawphil.net/judjuris/juri2020/jan2020/gr_123_2020.html',
+    );
 });
 
 it('persists the turn usage the provider reports', function () {

@@ -12,7 +12,6 @@ use App\Services\Ai\PythonAiClient;
 use App\Services\Crawler\LegalDigestService;
 use App\Services\Documents\DocumentClassifier;
 use App\Services\Documents\ImageOcrExtractor;
-use App\Services\LetterDrafts\LetterDraftService;
 use App\Services\TextRewrite\TextRewriteService;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -23,7 +22,6 @@ beforeEach(function () {
     config([
         'saligan.ai_provider.url' => 'http://ai-provider.test',
         'saligan.ai_provider.internal_secret' => 'shared-secret',
-        'saligan.chat.engine' => 'python',
     ]);
 
     Http::preventStrayRequests();
@@ -103,7 +101,7 @@ it('rejects an in-flight duplicate request id without reserving another turn', f
     }
 });
 
-it('uses the Python stream behind the chat feature flag without changing SSE bytes', function () {
+it('relays the Python stream without changing SSE bytes', function () {
     $sse = "event: status\ndata: {\"status\":\"composing\",\"label\":\"Writing your answer\"}\n\nevent: delta\ndata: {\"delta\":\"Proxied.\"}\n\nevent: done\ndata: {\"ok\":true,\"web_citations\":0}\n\n";
     Http::fake(['ai-provider.test/*' => Http::response($sse, 200)]);
 
@@ -121,9 +119,7 @@ it('uses the Python stream behind the chat feature flag without changing SSE byt
     expect($body)->toBe($sse);
 });
 
-it('routes embeddings, OCR, digests, rewrites, and letters through Python', function () {
-    config(['saligan.ai_provider.batch_engine' => 'python']);
-
+it('routes embeddings, OCR, digests, and rewrites through Python', function () {
     Http::fake(function (Request $request) {
         return match ($request->url()) {
             'http://ai-provider.test/embeddings' => Http::response([
@@ -136,13 +132,6 @@ it('routes embeddings, OCR, digests, rewrites, and letters through Python', func
             ]),
             'http://ai-provider.test/crawler/digest' => Http::response(['digest' => 'Nature: A test']),
             'http://ai-provider.test/agents/rewrite' => Http::response(['text' => 'Rewritten text']),
-            'http://ai-provider.test/agents/letter' => Http::response([
-                'title' => 'Demand Letter',
-                'content' => [
-                    'type' => 'doc',
-                    'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'Dear Sir']]]],
-                ],
-            ]),
             default => Http::response(['message' => 'Unexpected request'], 500),
         };
     });
@@ -155,10 +144,6 @@ it('routes embeddings, OCR, digests, rewrites, and letters through Python', func
             ->and(app(ImageOcrExtractor::class)->extract($path, 'image/png'))->toBe('Read text')
             ->and(app(LegalDigestService::class)->generate('Authority text'))->toBe('Nature: A test')
             ->and(app(TextRewriteService::class)->rewrite('Old text', 'Clarify'))->toBe('Rewritten text');
-
-        $letter = app(LetterDraftService::class)->generate('Write a demand letter', null);
-        expect($letter['title'])->toBe('Demand Letter')
-            ->and($letter['content']['type'])->toBe('doc');
 
         $label = Label::factory()->create(['slug' => 'pleading']);
         $document = Document::factory()->for(User::factory())->create();
@@ -173,5 +158,5 @@ it('routes embeddings, OCR, digests, rewrites, and letters through Python', func
         @unlink($path);
     }
 
-    Http::assertSentCount(6);
+    Http::assertSentCount(5);
 });

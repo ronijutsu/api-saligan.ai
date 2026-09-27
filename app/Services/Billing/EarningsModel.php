@@ -17,7 +17,7 @@ final class EarningsModel
 {
     /**
      * Measured against `claude-sonnet-5` with Anthropic's count_tokens endpoint,
-     * on a prompt built by ChatService: 22,934 tokens of system prompt, 13,340
+     * on the chat prompt: 22,934 tokens of system prompt, 13,340
      * of retrieved context (10 chunks at the configured legal/document caps),
      * and ~1,500 of history plus the question.
      *
@@ -34,8 +34,8 @@ final class EarningsModel
     public const OUTPUT_TOKENS_PER_MESSAGE = 1_000;
 
     /**
-     * The cacheable half of the system prompt — ChatService::staticInstructions(),
-     * which LegalChatAgent marks with a `cache_control` breakpoint. Measured at
+     * The cacheable half of the system prompt — the static instructions
+     * ai-provider marks with a `cache_control` breakpoint. Measured at
      * 21,886 tokens; the remaining ~1,048 tokens of system prompt vary per turn
      * and are billed at the uncached rate.
      */

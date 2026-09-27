@@ -2,7 +2,6 @@
 
 namespace Database\Factories;
 
-use App\Enums\ChatProvider;
 use App\Models\Conversation;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -23,7 +22,7 @@ class ConversationFactory extends Factory
             'user_id' => User::factory(),
             'title' => fake()->words(4, true),
             'purpose' => fake()->optional()->randomElement(['General', 'Draft a letter', 'Legal research', 'Summarize facts']),
-            'provider' => ChatProvider::Ollama,
+            'provider' => null,
         ];
     }
 }

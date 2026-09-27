@@ -100,7 +100,8 @@ final class AiBudget
                 'conversation_id' => $context['conversation_id'] ?? null,
                 'document_id' => $context['document_id'] ?? null,
                 'operation' => $operation,
-                'engine' => $context['engine'] ?? null,
+                // Every AI operation runs in ai-provider.
+                'engine' => $context['engine'] ?? 'python',
                 'status' => AiUsage::STATUS_RESERVED,
                 // The hold counts against the budget until settle replaces it
                 // with the measured cost, so concurrent turns cannot each

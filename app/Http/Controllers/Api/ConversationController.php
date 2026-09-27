@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Enums\ChatProvider;
 use App\Enums\LabelKind;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\ConversationResource;
@@ -14,7 +13,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Arr;
-use Illuminate\Validation\Rule;
 
 class ConversationController extends Controller
 {
@@ -60,7 +58,6 @@ class ConversationController extends Controller
             'title' => ['nullable', 'string', 'max:255'],
             'purpose' => ['nullable', 'string', 'max:100'],
             'case_id' => ['nullable', 'uuid', 'exists:cases,id'],
-            'provider' => ['nullable', Rule::enum(ChatProvider::class)],
             'label_ids' => ['nullable', 'array'],
             'label_ids.*' => ['uuid'],
         ]);
@@ -82,7 +79,6 @@ class ConversationController extends Controller
             'title' => $validated['title'] ?? $validated['purpose'] ?? null,
             'purpose' => $validated['purpose'] ?? null,
             'case_id' => $case,
-            'provider' => $validated['provider'] ?? ChatProvider::fromConfig(),
         ]);
 
         if ($tags->isNotEmpty()) {
@@ -114,7 +110,6 @@ class ConversationController extends Controller
         $validated = $request->validate([
             'title' => ['nullable', 'string', 'max:255'],
             'purpose' => ['nullable', 'string', 'max:100'],
-            'provider' => ['nullable', Rule::enum(ChatProvider::class)],
             'label_ids' => ['sometimes', 'array'],
             'label_ids.*' => ['uuid'],
         ]);
