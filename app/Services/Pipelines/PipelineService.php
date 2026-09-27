@@ -9,6 +9,7 @@ use App\Models\PipelineStage;
 use App\Models\PipelineStageChange;
 use App\Models\User;
 use App\Support\CrmMutation;
+use App\Support\PipelineTemplate;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -31,10 +32,21 @@ class PipelineService
      */
     public function create(User $user, array $attributes): Pipeline
     {
-        $stages = array_values($attributes['stages'] ?? PipelineStage::DEFAULT_STAGES);
+        $this->authorizeConfiguration($user);
+        $template = isset($attributes['template_key']) ? PipelineTemplate::find($attributes['template_key']) : null;
+        $stages = array_values($template['stages'] ?? $attributes['stages'] ?? PipelineStage::DEFAULT_STAGES);
+        if ($template !== null) {
+            if (! array_key_exists('name', $attributes)) {
+                $attributes['name'] = $template['name'];
+            }
+
+            if (! array_key_exists('description', $attributes)) {
+                $attributes['description'] = $template['description'];
+            }
+        }
         unset($attributes['stages']);
 
-        return DB::transaction(function () use ($user, $attributes, $stages): Pipeline {
+        return DB::transaction(function () use ($user, $attributes, $stages, $template): Pipeline {
             $isDefault = (bool) ($attributes['is_default'] ?? false)
                 || ! $this->scopedQuery($user)->active()->exists();
 
@@ -48,6 +60,8 @@ class PipelineService
                 'owner_user_id' => $user->id,
                 'organization_id' => $user->hasActiveMembership() ? $user->organization_id : null,
                 'is_default' => $isDefault,
+                'template_key' => $template['template_key'] ?? null,
+                'auto_provisioned' => false,
             ]);
             $pipeline->save();
 
@@ -58,6 +72,59 @@ class PipelineService
             $this->audit($user, $pipeline, 'created');
 
             return $pipeline->load('stages');
+        });
+    }
+
+    /**
+     * @return array{pipeline: Pipeline, created: bool}
+     */
+    public function provision(User $user, ?string $templateKey = null, ?string $requestId = null): array
+    {
+        $this->authorizeConfiguration($user);
+        $template = PipelineTemplate::find($templateKey ?? PipelineTemplate::DEFAULT_KEY);
+
+        if ($template === null) {
+            throw new CrmConflictException(
+                'invalid_template',
+                'The selected pipeline template is not approved.',
+                422,
+                ['template_key' => ['The selected pipeline template is invalid.']],
+            );
+        }
+
+        return DB::transaction(function () use ($user, $template, $requestId): array {
+            if ($user->hasActiveMembership()) {
+                $user->organization()->lockForUpdate()->firstOrFail();
+            } else {
+                User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            }
+
+            $query = $this->scopedQuery($user);
+            $existing = $query->where('auto_provisioned', true)->with('stages')->first();
+
+            if ($existing !== null) {
+                return ['pipeline' => $existing, 'created' => false];
+            }
+
+            if ($query->active()->exists()) {
+                throw new CrmConflictException(
+                    'pipeline_already_exists',
+                    'An active pipeline already exists in this scope.',
+                );
+            }
+
+            $pipeline = $this->create($user, [
+                'name' => $template['name'],
+                'description' => $template['description'],
+                'template_key' => $template['template_key'],
+                'stages' => $template['stages'],
+                'is_default' => true,
+                'auto_provisioned' => true,
+            ]);
+            $pipeline->forceFill(['auto_provisioned' => true])->save();
+            $this->audit($user, $pipeline, 'pipeline_auto_provisioned', null, $requestId, $template['template_key'], 'created');
+
+            return ['pipeline' => $pipeline->load('stages'), 'created' => true];
         });
     }
 
@@ -447,14 +514,31 @@ class PipelineService
             ->update(['is_default' => false]);
     }
 
-    private function audit(User $user, Pipeline $pipeline, string $action, ?string $stageId = null): void
-    {
+    private function audit(
+        User $user,
+        Pipeline $pipeline,
+        string $action,
+        ?string $stageId = null,
+        ?string $requestId = null,
+        ?string $templateKey = null,
+        ?string $result = null,
+    ): void {
         Log::info('CRM pipeline action', array_filter([
             'action' => $action,
             'pipeline_id' => $pipeline->id,
             'stage_id' => $stageId,
             'actor_id' => $user->id,
             'organization_id' => $pipeline->organization_id,
+            'request_id' => $requestId,
+            'template_key' => $templateKey,
+            'result' => $result,
         ], static fn (mixed $value): bool => $value !== null));
+    }
+
+    private function authorizeConfiguration(User $user): void
+    {
+        if ($user->hasActiveMembership() && ! $user->canManageOrganization()) {
+            abort(403);
+        }
     }
 }

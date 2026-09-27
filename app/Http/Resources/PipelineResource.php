@@ -26,6 +26,8 @@ class PipelineResource extends JsonResource
             'organization_id' => $this->organization_id,
             'owner_id' => $this->owner_user_id,
             'is_default' => $this->is_default,
+            'template_key' => $this->template_key,
+            'auto_provisioned' => $this->auto_provisioned,
             'archived_at' => $this->archived_at,
             'stages' => PipelineStageResource::collection($this->whenLoaded('stages')),
             'capabilities' => [
