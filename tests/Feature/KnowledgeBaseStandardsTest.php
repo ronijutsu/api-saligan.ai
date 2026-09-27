@@ -58,8 +58,6 @@ it('propagates standard metadata when crawling a standard source', function () {
         'category' => LegalSourceCategory::Standard,
     ]);
 
-    config(['saligan.ai_provider.batch_engine' => 'laravel']);
-
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
         '*/embeddings' => Http::response(['embeddings' => [array_fill(0, 768, 0.25)]], 200),

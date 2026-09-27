@@ -6,7 +6,6 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\MatterMemory\MatterMemoryService;
-use App\Services\MatterMemory\MemoryWriteBackParser;
 
 test('matter memory service stores and retrieves memories', function () {
     $organization = Organization::factory()->create();
@@ -156,164 +155,6 @@ test('matter memory service returns empty message when no memories', function ()
     expect($block)->toBe('No matter-specific memory entries recorded for this matter.');
 });
 
-test('memory write back parser extracts and stores valid blocks', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $text = "Here is the analysis.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: The hearing is scheduled for March 15 [[MEMORY_WRITE_END]]\n\nPlease review.";
-
-    $cleaned = $parser->parseAndStore($text, $case, $user, $service);
-
-    expect($cleaned)->not->toContain('MEMORY_WRITE_START')
-        ->and($cleaned)->toContain('Here is the analysis.')
-        ->and($cleaned)->toContain('Please review.');
-
-    $memories = $service->getMemories($case, 'fact');
-    expect($memories)->toHaveCount(1)
-        ->and($memories->first()->content)->toBe('The hearing is scheduled for March 15');
-});
-
-test('memory write back parser handles multiple blocks', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $text = "Analysis.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: Fact one [[MEMORY_WRITE_END]]\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=deadline content: Due March 20 [[MEMORY_WRITE_END]]\n\nDone.";
-
-    $cleaned = $parser->parseAndStore($text, $case, $user, $service);
-
-    expect($cleaned)->not->toContain('MEMORY_WRITE_START');
-
-    $facts = $service->getMemories($case, 'fact');
-    $deadlines = $service->getMemories($case, 'deadline');
-
-    expect($facts)->toHaveCount(1)
-        ->and($facts->first()->content)->toBe('Fact one')
-        ->and($deadlines)->toHaveCount(1)
-        ->and($deadlines->first()->content)->toBe('Due March 20');
-});
-
-test('memory write back parser rejects malformed blocks', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    // Missing closing tag
-    $text1 = "Text.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: Incomplete block";
-    $cleaned1 = $parser->parseAndStore($text1, $case, $user, $service);
-    expect($cleaned1)->toContain('MEMORY_WRITE_START');
-
-    // Wrong field names
-    $text2 = "Text.\n\n[[MEMORY_WRITE_START]] case={$case->id} kind=fact payload: Wrong fields [[MEMORY_WRITE_END]]";
-    $cleaned2 = $parser->parseAndStore($text2, $case, $user, $service);
-    expect($cleaned2)->toContain('MEMORY_WRITE_START');
-
-    // Invalid type: the block is well-formed, so it is stripped from the
-    // reply (the user must never see raw markers) but nothing is stored.
-    $text3 = "Text.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=invalid content: Bad type [[MEMORY_WRITE_END]]";
-    $cleaned3 = $parser->parseAndStore($text3, $case, $user, $service);
-    expect($cleaned3)->not->toContain('MEMORY_WRITE_START');
-
-    $memories = $service->getMemories($case);
-    expect($memories)->toHaveCount(0);
-});
-
-test('memory write back parser rejects wrong matter id', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-    $otherCase = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $text = "Text.\n\n[[MEMORY_WRITE_START]] matter={$otherCase->id} type=fact content: Wrong matter [[MEMORY_WRITE_END]]";
-
-    $cleaned = $parser->parseAndStore($text, $case, $user, $service);
-
-    // Stripped from the reply, stored against neither case.
-    expect($cleaned)->not->toContain('MEMORY_WRITE_START');
-
-    $memories = $service->getMemories($case);
-    expect($memories)->toHaveCount(0);
-    expect($service->getMemories($otherCase))->toHaveCount(0);
-});
-
-test('memory write back parser skips duplicates', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $service->store($case, $user, 'fact', 'The hearing is March 15');
-
-    $text = "Text.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: The hearing is March 15 [[MEMORY_WRITE_END]]";
-
-    $parser->parseAndStore($text, $case, $user, $service);
-
-    $memories = $service->getMemories($case, 'fact');
-    expect($memories)->toHaveCount(1);
-});
-
-test('memory write back parser blocks writes on legal hold', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create([
-        'organization_id' => $organization->id,
-        'retention_status' => 'on-legal-hold',
-    ]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $text = "Text.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: Should not be stored [[MEMORY_WRITE_END]]";
-
-    $parser->parseAndStore($text, $case, $user, $service);
-
-    $memories = $service->getMemories($case);
-    expect($memories)->toHaveCount(0);
-});
-
-test('memory write back parser handles text without blocks', function () {
-    $organization = Organization::factory()->create();
-    $user = User::factory()->for($organization)->create();
-    $case = LegalCase::factory()->for($user)->create(['organization_id' => $organization->id]);
-
-    $parser = new MemoryWriteBackParser;
-    $service = new MatterMemoryService;
-
-    $text = 'This is a normal response without any write-back blocks.';
-
-    $cleaned = $parser->parseAndStore($text, $case, $user, $service);
-
-    expect($cleaned)->toBe($text);
-
-    $memories = $service->getMemories($case);
-    expect($memories)->toHaveCount(0);
-});
-
-test('memory write back parser detects blocks in text', function () {
-    $parser = new MemoryWriteBackParser;
-
-    $textWithBlock = "Text\n\n[[MEMORY_WRITE_START]] matter=123 type=fact content: Something [[MEMORY_WRITE_END]]";
-    $textWithoutBlock = 'Text without any blocks.';
-
-    expect($parser->hasWriteBackBlocks($textWithBlock))->toBeTrue()
-        ->and($parser->hasWriteBackBlocks($textWithoutBlock))->toBeFalse();
-});
-
 test('matter memory works for a solo user whose case has no organization', function () {
     // cases.organization_id and users.organization_id are both nullable, so a
     // solo user's case carries no organization. matter_memory.organization_id
@@ -322,13 +163,8 @@ test('matter memory works for a solo user whose case has no organization', funct
     $case = LegalCase::factory()->for($user)->create(['organization_id' => null]);
 
     $service = new MatterMemoryService;
-    $parser = new MemoryWriteBackParser;
 
-    $text = "Analysis.\n\n[[MEMORY_WRITE_START]] matter={$case->id} type=fact content: DPWH took possession of the 1,200 sq. m. portion [[MEMORY_WRITE_END]]";
-
-    $cleaned = $parser->parseAndStore($text, $case, $user, $service);
-
-    expect($cleaned)->not->toContain('MEMORY_WRITE_START');
+    $service->store($case, $user, 'fact', 'DPWH took possession of the 1,200 sq. m. portion');
 
     $memories = $service->getMemories($case);
 

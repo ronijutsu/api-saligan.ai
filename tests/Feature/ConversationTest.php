@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\ChatProvider;
 use App\Models\Conversation;
 use App\Models\LegalCase;
 use App\Models\Plan;
@@ -30,17 +29,19 @@ it('lists only the authenticated user conversations', function () {
         ->and($response->json('data.0.id'))->toBe($own->id);
 });
 
-it('creates a conversation with the default provider', function () {
+// ai-provider picks who answers, so a new conversation has no provider until
+// its first reply is saved.
+it('creates a conversation without choosing a provider', function () {
     $response = $this->signInAs($this->user)
-        ->postJson('/api/conversations', ['title' => 'RA 6657 research'])
+        ->postJson('/api/conversations', ['title' => 'RA 6657 research', 'provider' => 'anthropic'])
         ->assertCreated();
 
     expect($response->json('data.title'))->toBe('RA 6657 research')
-        ->and($response->json('data.provider'))->toBe(ChatProvider::Ollama->value);
+        ->and($response->json('data.provider'))->toBeNull();
 
     $this->assertDatabaseHas('conversations', [
         'user_id' => $this->user->id,
-        'provider' => ChatProvider::Ollama->value,
+        'provider' => null,
     ]);
 });
 
@@ -80,21 +81,6 @@ it('forbids attaching a conversation to another users case', function () {
         ->assertForbidden();
 });
 
-it('creates a conversation with an explicit provider', function () {
-    $response = $this->signInAs($this->user)
-        ->postJson('/api/conversations', ['provider' => 'gemini'])
-        ->assertCreated();
-
-    expect($response->json('data.provider'))->toBe('gemini');
-});
-
-it('rejects an invalid provider', function () {
-    $this->signInAs($this->user)
-        ->postJson('/api/conversations', ['provider' => 'claude'])
-        ->assertUnprocessable()
-        ->assertJsonValidationErrors('provider');
-});
-
 it('shows a conversation with its messages', function () {
     $conversation = Conversation::factory()->for($this->user)
         ->hasMessages(2)
@@ -115,7 +101,7 @@ it('forbids showing another user conversation', function () {
         ->assertForbidden();
 });
 
-it('updates the conversation title and provider', function () {
+it('updates the conversation title but never its provider', function () {
     $conversation = Conversation::factory()->for($this->user)->create();
 
     $this->signInAs($this->user)
@@ -125,7 +111,7 @@ it('updates the conversation title and provider', function () {
         ])
         ->assertOk()
         ->assertJsonPath('data.title', 'Renamed')
-        ->assertJsonPath('data.provider', 'gemini');
+        ->assertJsonPath('data.provider', null);
 });
 
 it('deletes a conversation', function () {

@@ -24,7 +24,7 @@ class ConversationResource extends JsonResource
             'case_tags' => $this->whenLoaded('case', fn (): array => $this->case?->tags ?? []),
             'title' => $this->title,
             'purpose' => $this->purpose,
-            'provider' => $this->provider->value,
+            'provider' => $this->provider?->value,
             'pinned_at' => $this->pinned_at,
             'pinned' => $this->pinned_at !== null,
             'messages_count' => $this->whenCounted('messages', fn (int $count) => $count),

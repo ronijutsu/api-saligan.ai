@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Enums\ChatProvider;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\ConversationResource;
 use App\Http\Resources\LegalCaseResource;
@@ -127,7 +126,6 @@ class LegalCaseController extends Controller
 
             $case->conversations()->create([
                 'user_id' => $request->user()->id,
-                'provider' => ChatProvider::fromConfig(),
                 'purpose' => 'General',
                 'title' => 'General',
             ]);
@@ -230,7 +228,6 @@ class LegalCaseController extends Controller
 
             $copy->conversations()->create([
                 'user_id' => $request->user()->id,
-                'provider' => ChatProvider::fromConfig(),
                 'purpose' => 'General',
                 'title' => 'General',
             ]);
@@ -257,7 +254,6 @@ class LegalCaseController extends Controller
 
         $conversation = $case->conversations()->create([
             'user_id' => $request->user()->id,
-            'provider' => ChatProvider::fromConfig(),
             'purpose' => $purpose,
             'title' => $validated['title'] ?? $purpose,
         ]);

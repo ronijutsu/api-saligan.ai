@@ -2,7 +2,6 @@
 
 namespace App\Services\Ai;
 
-use App\Enums\ChatProvider;
 use App\Enums\MessageRole;
 use App\Models\Conversation;
 use App\Models\Template;
@@ -12,11 +11,10 @@ use App\Services\MatterMemory\MatterMemoryService;
 use App\Support\CaseContextBlock;
 use App\Support\PlanFeatures;
 use App\Support\UserProfile;
-use Illuminate\Support\Facades\Log;
 
 class PythonConversationContext
 {
-    private const CONTEXT_CONTRACT_VERSION = 1;
+    private const CONTEXT_CONTRACT_VERSION = 2;
 
     public function __construct(
         private readonly CaseContextBlock $caseContext,
@@ -33,11 +31,9 @@ class PythonConversationContext
         $case = $conversation->case;
         $capabilities = $this->effectiveCapabilities($user);
         $deepResearch = in_array(PlanFeatures::DEEP_RESEARCH, $capabilities, true);
-        $webSearchEnabled = in_array(PlanFeatures::WEB_SEARCH, $capabilities, true)
-            && (bool) config('saligan.web_search.enabled', false);
+        $webSearchEnabled = in_array(PlanFeatures::WEB_SEARCH, $capabilities, true);
         $prompt = $this->prompts->activeSystemPrompt();
         $template = $this->prompts->resolveTemplate($conversation, $currentMessage ?? '');
-        [$provider, $model] = $this->providerAndModel($conversation);
 
         return [
             'context_contract_version' => self::CONTEXT_CONTRACT_VERSION,
@@ -48,8 +44,8 @@ class PythonConversationContext
             'deep_research' => $deepResearch,
             'web_search_enabled' => $webSearchEnabled,
             'web_search_max_calls' => $webSearchEnabled ? $this->webSearchBudget($deepResearch) : 0,
-            'provider' => $provider,
-            'model' => $model,
+            // What the plan buys, never how it is served: ai-provider picks
+            // the provider and model from these (ADR-012).
             'plan_tier' => $user->plan()?->slug,
             // The provider composes the prompt itself: it reads the persona
             // from the database and owns the rules (handoff §13, b1). Shipping
@@ -109,60 +105,6 @@ class PythonConversationContext
             $deepResearch ? 'saligan.web_search.max_searches' : 'saligan.web_search.base_max_searches',
             0,
         ));
-    }
-
-    /** @return array{0: string, 1: string} */
-    protected function providerAndModel(Conversation $conversation): array
-    {
-        $provider = ChatProvider::fromConfig();
-
-        return match ($provider) {
-            ChatProvider::Anthropic => filled(config('ai.providers.anthropic.key')) ? [
-                'anthropic',
-                PlanFeatures::has($conversation->user, PlanFeatures::FRONTIER_MODEL)
-                    ? (string) config('saligan.chat.anthropic_model')
-                    : (string) config('saligan.chat.anthropic_base_model'),
-            ] : $this->ollama(),
-            ChatProvider::Gemini => filled(config('ai.providers.gemini.key'))
-                ? ['gemini', (string) config('saligan.chat.gemini_model')]
-                : $this->ollama(),
-            // OpenRouter serves through the OpenAI-compatible client, so it
-            // forwards rather than mapping: what the operator configured is
-            // what answers.
-            ChatProvider::Openrouter => filled(config('ai.providers.openrouter.key'))
-                ? ['openrouter', (string) config('saligan.chat.openrouter_model')]
-                : $this->ollama(),
-            // Meta's endpoint is OpenAI-compatible and the Python adapter has
-            // a first-class Meta branch. Forward it when configured so the
-            // selected provider/model and billing metadata stay truthful.
-            ChatProvider::Meta => filled(config('ai.providers.meta.key'))
-                ? ['meta', (string) config('saligan.chat.meta_model')]
-                : $this->ollama(),
-            // OpenAI is still not a provider supported by the Python adapter;
-            // retain the explicit hosted fallback until that client lands.
-            ChatProvider::OpenAI => $this->hostedFallback($provider),
-            default => $this->ollama(),
-        };
-    }
-
-    /** @return array{0: string, 1: string} */
-    protected function hostedFallback(ChatProvider $provider): array
-    {
-        Log::warning('Python AI provider has no client for the configured chat provider; serving Gemini instead.', [
-            'configured_provider' => $provider->value,
-        ]);
-
-        if (filled(config('ai.providers.gemini.key'))) {
-            return ['gemini', (string) config('saligan.chat.gemini_model')];
-        }
-
-        return $this->ollama();
-    }
-
-    /** @return array{0: string, 1: string} */
-    protected function ollama(): array
-    {
-        return ['ollama', (string) config('saligan.chat.ollama_model')];
     }
 
     protected function template(Template $template): string

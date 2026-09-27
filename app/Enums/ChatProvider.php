@@ -2,6 +2,12 @@
 
 namespace App\Enums;
 
+/**
+ * The provider that answered a turn, as ai-provider reports it.
+ *
+ * A record, never a choice: ai-provider selects the provider and model for
+ * every turn (ADR-012), and Laravel only stores what it was told answered.
+ */
 enum ChatProvider: string
 {
     case Ollama = 'ollama';
@@ -10,13 +16,4 @@ enum ChatProvider: string
     case Anthropic = 'anthropic';
     case Meta = 'meta';
     case Openrouter = 'openrouter';
-
-    /**
-     * The provider to use by default for new conversations, taken from the
-     * configured AI_CHAT_PROVIDER and falling back to Ollama.
-     */
-    public static function fromConfig(): self
-    {
-        return self::tryFrom((string) config('saligan.chat.provider')) ?? self::Ollama;
-    }
 }
