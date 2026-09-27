@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'description', 'is_default'])]
+#[Fillable(['name', 'description', 'is_default', 'template_key', 'auto_provisioned'])]
 class Pipeline extends Model
 {
     /** @use HasFactory<PipelineFactory> */
@@ -21,6 +21,7 @@ class Pipeline extends Model
     {
         return [
             'is_default' => 'boolean',
+            'auto_provisioned' => 'boolean',
             'archived_at' => 'datetime',
         ];
     }
