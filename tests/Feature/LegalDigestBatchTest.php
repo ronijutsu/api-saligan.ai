@@ -19,15 +19,17 @@ use Illuminate\Support\Facades\Http;
  * Batched digesting covers the bulk producers only — the nightly crawl and the
  * backfill. The read-path digest stays inline, and has its own coverage; the
  * point of these tests is that the split holds.
+ *
+ * The batch lifecycle lives in ai-provider (ADR-011 generalised), so the
+ * boundary faked here is its three routes: submit, poll, and read results.
+ * Which provider and model serve a digest batch is Python's business and is
+ * covered by the ai-provider suite, not this one.
  */
 
 beforeEach(function () {
     config([
         'saligan.crawler.digest.provider' => 'gemini',
-        'saligan.crawler.digest.model' => 'gemini-3.6-flash',
         'saligan.crawler.digest.batch.enabled' => true,
-        'ai.providers.gemini.key' => 'gemini-test-key',
-        'ai.providers.gemini.url' => 'https://generativelanguage.googleapis.com/v1beta/',
     ]);
 
     $this->page = CrawledPage::factory()->create([
@@ -36,26 +38,43 @@ beforeEach(function () {
 
     $this->text = 'DECISION. This is an appeal from the Court of Appeals affirming the conviction of the accused...';
 
-    $this->state = 'JOB_STATE_RUNNING';
-    $this->inlined = [];
+    // Held as state rather than re-faked per call: Http::fake() appends stubs
+    // instead of replacing them, so a second fake would never win. The results
+    // pattern is listed first because `*/batches/*` also matches it.
+    $this->jobStatus = 'in_progress';
+    $this->batchResults = [];
+    $this->pollStatus = 200;
+    $this->submitStatus = 201;
 
     Http::fake([
-        '*:batchGenerateContent' => fn () => Http::response(['name' => 'batches/digest1']),
-        '*/batches/*' => fn () => Http::response([
-            'name' => 'batches/digest1',
-            'metadata' => ['state' => $this->state],
-            'response' => ['inlinedResponses' => $this->inlined],
+        '*/crawler/digest/batches/*/results' => fn () => Http::response([
+            'results' => $this->batchResults,
         ]),
+        '*/crawler/digest/batches/*' => fn () => $this->pollStatus === 200
+            ? Http::response([
+                'status' => $this->jobStatus,
+                'counts' => ['total' => 1, 'succeeded' => 1, 'failed' => 0],
+            ])
+            : Http::response(['message' => 'not found'], $this->pollStatus),
+        '*/crawler/digest/batches' => fn () => $this->submitStatus === 201
+            ? Http::response([
+                'batch_id' => 'batches/digest1',
+                'provider' => 'gemini',
+                'model' => 'gemini-3.6-flash',
+                'submitted_at' => '2026-09-17T08:00:00+00:00',
+            ], 201)
+            : Http::response(['message' => 'unavailable'], $this->submitStatus),
     ]);
 
-    $this->batchEnds = function (array $inlined = []): void {
-        $this->state = 'JOB_STATE_SUCCEEDED';
-        $this->inlined = $inlined;
+    $this->batchEnds = function (array $results = []): void {
+        $this->jobStatus = 'ended';
+        $this->batchResults = $results;
     };
 
-    $this->answer = fn (LegalDigestRequest $request, string $text): array => [
-        'metadata' => ['key' => $request->customId()],
-        'response' => ['candidates' => [['content' => ['parts' => [['text' => $text]]]]]],
+    $this->answer = fn (LegalDigestRequest $request, string $digest): array => [
+        'custom_id' => $request->customId(),
+        'status' => 'succeeded',
+        'digest' => $digest,
     ];
 
     $this->digest = "Nature: An appeal from the Court of Appeals.\nFacts: The accused was convicted...";
@@ -68,7 +87,7 @@ it('queues a page rather than digesting it', function () {
 
     expect($request->crawled_page_id)->toBe($this->page->id)
         ->and($request->status)->toBe(LegalDigestRequest::STATUS_PENDING)
-        ->and($request->prompt)->toContain('People v. Dela Cruz')
+        ->and($request->excerpt)->toContain('DECISION')
         ->and($this->page->fresh()->digest)->toBeNull();
 
     Http::assertNothingSent();
@@ -79,7 +98,7 @@ it('re-queues a page rather than queueing it twice', function () {
     app(LegalDigestBatcher::class)->enqueue($this->page, 'A later crawl of the same authority.');
 
     expect(LegalDigestRequest::count())->toBe(1)
-        ->and(LegalDigestRequest::sole()->prompt)->toContain('A later crawl');
+        ->and(LegalDigestRequest::sole()->excerpt)->toContain('A later crawl');
 });
 
 it('queues nothing for a page with no text', function () {
@@ -87,7 +106,7 @@ it('queues nothing for a page with no text', function () {
         ->and(LegalDigestRequest::count())->toBe(0);
 });
 
-it('submits the queued pages as one batch, asking for prose rather than JSON', function () {
+it('submits the queued pages as one batch', function () {
     app(LegalDigestBatcher::class)->enqueue($this->page, $this->text);
 
     expect(app(LegalDigestBatcher::class)->submit())->toBe('batches/digest1');
@@ -98,23 +117,18 @@ it('submits the queued pages as one batch, asking for prose rather than JSON', f
         ->and($request->batch_id)->toBe('batches/digest1');
 
     Http::assertSent(function (Request $sent) use ($request): bool {
-        if (! str_contains($sent->url(), ':batchGenerateContent')) {
+        if (! str_ends_with($sent->url(), '/crawler/digest/batches') || $sent->method() !== 'POST') {
             return false;
         }
 
-        $body = $sent->data()['batch'];
-        $inline = $body['input_config']['requests']['requests'][0];
+        $payload = $sent->data()['requests'][0];
 
-        return $inline['metadata']['key'] === $request->customId()
-            && str_contains($inline['request']['system_instruction']['parts'][0]['text'], 'case digests and rule indexes of Philippine legal authorities')
-            && str_contains($inline['request']['contents'][0]['parts'][0]['text'], 'People v. Dela Cruz')
-            // A digest is prose. Asking for JSON back would only wrap it in
-            // quotes and escapes for the reader to undo.
-            && ! array_key_exists('response_schema', $inline['request']['generation_config'])
-            && ! array_key_exists('response_mime_type', $inline['request']['generation_config'])
-            // Labelled so a digest batch is not mistaken for a classification
-            // one in Google's console.
-            && str_starts_with($body['display_name'], 'legal-digest-');
+        // The exact contract in ADR-011: the id maps the answer back, and the
+        // excerpt travels as `text` rather than as a pre-rendered prompt.
+        return $payload['custom_id'] === $request->customId()
+            && str_contains($payload['text'], 'DECISION')
+            && $payload['title'] === 'People v. Dela Cruz, G.R. No. 123456'
+            && $payload['kind'] === 'authority';
     });
 });
 
@@ -184,8 +198,7 @@ it('queues from the crawl instead of digesting each page inline', function () {
 
     Http::fake([
         '*/robots.txt' => Http::response("User-agent: *\nDisallow:\n", 200),
-        '*/api/embed' => Http::response(fakeEmbedResponse(), 200),
-        '*:batchGenerateContent' => Http::response(['name' => 'batches/digest1']),
+        '*/embeddings' => Http::response(fakeEmbedResponse(), 200),
         '*' => Http::response('<html><body><p>Republic Act No. 6657 coverage rules.</p></body></html>', 200),
     ]);
 
@@ -196,11 +209,11 @@ it('queues from the crawl instead of digesting each page inline', function () {
 
     expect($request->status)->toBe(LegalDigestRequest::STATUS_PENDING)
         ->and($request->page->digest)->toBeNull()
-        ->and($request->prompt)->toContain('Republic Act No. 6657');
+        ->and($request->excerpt)->toContain('Republic Act No. 6657');
 
     // Queued, not sent — submitting is the scheduled sweep's job, so a crawl
     // of 500 pages still costs exactly one batch rather than 500 calls.
-    Http::assertNotSent(fn (Request $sent): bool => str_contains($sent->url(), ':batchGenerateContent'));
+    Http::assertNotSent(fn (Request $sent): bool => str_contains($sent->url(), '/crawler/digest/batches'));
 });
 
 it('does not batch when the digest provider has no batch API', function () {

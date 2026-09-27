@@ -4,14 +4,16 @@ namespace App\Jobs;
 
 use App\Enums\DocumentStatus;
 use App\Exceptions\DocumentProcessingException;
+use App\Jobs\Middleware\LimitUserIngestConcurrency;
 use App\Models\AiUsage;
 use App\Models\Document;
-use App\Models\DocumentChunk;
 use App\Services\Ai\EmbeddingService;
 use App\Services\Billing\AiBudget;
 use App\Services\Billing\AiCosting;
 use App\Services\Documents\DocumentChunker;
 use App\Services\Documents\DocumentClassifier;
+use App\Services\Documents\DocumentIndexQuota;
+use App\Services\Documents\DocumentIngestLimits;
 use App\Services\Documents\ImageOcrExtractor;
 use App\Services\Documents\StoredFiles;
 use App\Services\Documents\TextExtractor;
@@ -22,6 +24,9 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use RuntimeException;
 use Throwable;
 
 class ProcessDocumentUpload implements ShouldQueue
@@ -43,13 +48,15 @@ class ProcessDocumentUpload implements ShouldQueue
     }
 
     /**
-     * Guard against two workers ingesting the same document at once.
+     * Guard against two workers ingesting the same document at once, and
+     * against one account occupying the whole document-processing pool.
      *
-     * @return array<int, WithoutOverlapping>
+     * @return array<int, object>
      */
     public function middleware(): array
     {
         return [
+            new LimitUserIngestConcurrency((int) ($this->document->user_id ?? 0)),
             (new WithoutOverlapping('document:'.$this->document->id))
                 ->releaseAfter(60)
                 ->expireAfter(600),
@@ -66,7 +73,14 @@ class ProcessDocumentUpload implements ShouldQueue
         EmbeddingService $embeddings,
         StoredFiles $files,
         DocumentClassifier $classifier,
+        ?DocumentIngestLimits $limits = null,
+        ?DocumentIndexQuota $quota = null,
     ): void {
+        // Resolved lazily so the job's collaborators stay injectable in tests
+        // that call handle() directly with the original argument list.
+        $limits ??= app(DocumentIngestLimits::class);
+        $quota ??= app(DocumentIndexQuota::class);
+
         $document = $this->document;
 
         if ($document->status === DocumentStatus::Ready) {
@@ -77,9 +91,6 @@ class ProcessDocumentUpload implements ShouldQueue
             'status' => DocumentStatus::Processing,
             'error_message' => null,
         ]);
-
-        // Clear any chunks from a previous partial attempt.
-        $document->chunks()->delete();
 
         $mimeType = $document->mime_type ?? '';
 
@@ -96,9 +107,16 @@ class ProcessDocumentUpload implements ShouldQueue
         // plaintext never lingers on disk.
         $copy = $files->localCopy($document->storage_path);
         $ocrRan = false;
+        $ocrPages = 0;
 
         try {
             if ($this->isImage($mimeType) && $readsScans) {
+                // An image is a single page, and the ceiling is checked before
+                // the model runs: refusing after paying for the transcription
+                // would defeat the point of the ceiling.
+                $ocrPages = 1;
+                $limits->assertOcrPages($ocrPages);
+
                 $text = $ocr->extract($copy->path, $mimeType);
                 $ocrRan = true;
             } else {
@@ -113,6 +131,9 @@ class ProcessDocumentUpload implements ShouldQueue
             // The pages are images, which is exactly what the OCR model reads,
             // so fall through to it rather than rejecting the upload.
             if ($readsScans && trim($this->sanitizeText($text)) === '' && ImageOcrExtractor::handles($mimeType) && ! $this->isImage($mimeType)) {
+                $ocrPages = $extractor->pageCount($copy->path, $mimeType);
+                $limits->assertOcrPages($ocrPages);
+
                 $text = $ocr->extract($copy->path, $mimeType);
                 $ocrRan = true;
             }
@@ -137,6 +158,10 @@ class ProcessDocumentUpload implements ShouldQueue
             });
         }
 
+        // Refuse oversized text before chunking it: measuring the characters is
+        // O(1)-ish next to splitting 26M of them into passages.
+        $limits->assertTextSize($text);
+
         $chunks = $chunker->chunk(
             $text,
             config('saligan.documents.chunk_size'),
@@ -147,25 +172,9 @@ class ProcessDocumentUpload implements ShouldQueue
             throw new DocumentProcessingException('The extracted text produced no chunks.');
         }
 
-        $vectors = $embeddings->embedMany($chunks);
+        $limits->assertChunkCount(count($chunks));
 
-        if (count($vectors) !== count($chunks)) {
-            throw new \RuntimeException(sprintf(
-                'Embedding count mismatch: %d chunks in, %d vectors out.',
-                count($chunks),
-                count($vectors),
-            ));
-        }
-
-        foreach ($chunks as $index => $content) {
-            DocumentChunk::create([
-                'document_id' => $document->id,
-                'user_id' => $document->user_id,
-                'chunk_index' => $index,
-                'content' => $content,
-                'embedding' => $vectors[$index],
-            ]);
-        }
+        $this->embedAndStore($chunks, $embeddings, $quota);
 
         // File the document into the case file. This runs before the document
         // is marked ready so it lands already sorted, and it never throws: a
@@ -179,15 +188,121 @@ class ProcessDocumentUpload implements ShouldQueue
         $document->update(['status' => DocumentStatus::Ready]);
 
         // Settle the upload's hold with what ingestion measurably spent.
-        // Embeddings are measured from the extracted length; OCR and
-        // classification are modeled flat add-ons because the providers do
-        // not report per-page counts on this path. Queue-level retries share
-        // the one reservation — only this success settles it.
-        $this->settleIngestUsage($document, $text, $ocrRan, $readsScans);
+        // Embeddings are measured from the extracted length; OCR is charged per
+        // page and classification is a modeled flat add-on. Queue-level retries
+        // share the one reservation — only this success settles it.
+        $this->settleIngestUsage($document, $text, $ocrRan, $ocrPages, $readsScans);
     }
 
-    protected function settleIngestUsage(Document $document, string $text, bool $ocrRan, bool $readsScans): void
-    {
+    /**
+     * Embed and store the document's passages.
+     *
+     * Passage embedding is the expensive half of ingestion, and it is the half
+     * a worker kill is most likely to interrupt. So it runs in segments: each
+     * segment is embedded, then written in one transaction with multi-row
+     * inserts. A retry finds the finished segments already persisted and skips
+     * them, which is what stops a timeout from re-embedding — and re-paying
+     * for — the whole document. It is also what makes the update itself cheap:
+     * 58,000 single-row inserts each maintaining the HNSW index is minutes of
+     * writes, while the same rows in batches of 500 is a fraction of that.
+     *
+     * @param  array<int, string>  $chunks
+     */
+    protected function embedAndStore(
+        array $chunks,
+        EmbeddingService $embeddings,
+        DocumentIndexQuota $quota,
+    ): void {
+        $document = $this->document;
+        $chunkCount = count($chunks);
+
+        // Passages left over from a longer previous attempt would otherwise
+        // linger past the end of the document.
+        $document->chunks()->where('chunk_index', '>=', $chunkCount)->delete();
+
+        $existing = $document->chunks()->pluck('chunk_index')->all();
+        $have = array_flip(array_map('intval', $existing));
+
+        $pending = [];
+
+        for ($index = 0; $index < $chunkCount; $index++) {
+            if (! isset($have[$index])) {
+                $pending[] = $index;
+            }
+        }
+
+        // Capacity is checked against the passages that are actually missing,
+        // so a resumed retry is not asked to pay for room it already holds.
+        if ($document->user !== null) {
+            $quota->assertCanIndex($document->user, count($pending));
+        }
+
+        // The index must hold one model's vectors. Checked before a single
+        // vector is requested, because the damage is silent: a same-dimension
+        // model switch inserts happily and only degrades retrieval later.
+        $embeddings->assertModelMatchesIndex(
+            Document::query()
+                ->whereNotNull('embedding_model')
+                ->latest('updated_at')
+                ->value('embedding_model'),
+        );
+
+        if ($pending === []) {
+            return;
+        }
+
+        $document->forceFill(['embedding_model' => $embeddings->model()])->save();
+
+        $segmentSize = max(1, (int) config('saligan.documents.embed_segment_chunks', 512));
+        $batchSize = max(1, (int) config('saligan.documents.insert_batch_size', 500));
+
+        foreach (array_chunk($pending, $segmentSize) as $segment) {
+            $vectors = $embeddings->embedMany(
+                array_map(fn (int $index): string => $chunks[$index], $segment),
+            );
+
+            if (count($vectors) !== count($segment)) {
+                throw new RuntimeException(sprintf(
+                    'Embedding count mismatch: %d chunks in, %d vectors out.',
+                    count($segment),
+                    count($vectors),
+                ));
+            }
+
+            $rows = [];
+            $now = now();
+
+            foreach ($segment as $offset => $index) {
+                $rows[] = [
+                    'id' => (string) Str::uuid(),
+                    'document_id' => $document->id,
+                    'user_id' => $document->user_id,
+                    'chunk_index' => $index,
+                    'content' => $chunks[$index],
+                    // pgvector's input format is the JSON array syntax, which is
+                    // what the model's `array` cast already relies on. Kept
+                    // explicit here because a multi-row insert bypasses casts.
+                    'embedding' => json_encode($vectors[$offset], JSON_THROW_ON_ERROR),
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+
+            DB::transaction(function () use ($rows, $batchSize): void {
+                foreach (array_chunk($rows, $batchSize) as $batch) {
+                    DB::table('document_chunks')->insert($batch);
+                }
+            });
+        }
+    }
+
+    protected function settleIngestUsage(
+        Document $document,
+        string $text,
+        bool $ocrRan,
+        int $ocrPages,
+        bool $readsScans,
+    ): void {
         if ($document->ai_usage_id === null) {
             return;
         }
@@ -200,8 +315,11 @@ class ProcessDocumentUpload implements ShouldQueue
 
         $cost = AiCosting::embeddingCostUsd(AiCosting::estimateTokens($text));
 
+        // Priced by the page, not per upload: a 300-page scan costs what 300
+        // pages of vision OCR cost, which is the whole reason the page ceiling
+        // exists.
         if ($ocrRan) {
-            $cost += AiCosting::OCR_ADDON_USD;
+            $cost += AiCosting::ocrCostUsd($ocrPages);
         }
 
         if ($readsScans) {
@@ -264,7 +382,9 @@ class ProcessDocumentUpload implements ShouldQueue
         ]);
 
         // A failed ingestion bills nothing: release the hold so the retry —
-        // which reserves anew — is the single spend for this document.
+        // which reserves anew — is the single spend for this document. The
+        // passages already persisted are left in place: they are paid for, and
+        // the retry resumes from them rather than re-embedding the document.
         if ($this->document->ai_usage_id !== null) {
             $reservation = AiUsage::query()->find($this->document->ai_usage_id);
 

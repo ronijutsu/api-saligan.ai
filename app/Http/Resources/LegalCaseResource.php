@@ -25,6 +25,7 @@ class LegalCaseResource extends JsonResource
             'organization_id' => $this->organization_id,
             'owner' => new CaseMemberResource($this->whenLoaded('owner')),
             'assignees' => CaseMemberResource::collection($this->whenLoaded('assignees')),
+            'clients' => CaseClientResource::collection($this->whenLoaded('caseClients')),
 
             // Lets the client hide controls it would only be 403'd for. The
             // policy is still what decides; this is presentation.

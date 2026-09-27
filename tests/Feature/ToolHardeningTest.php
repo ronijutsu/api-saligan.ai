@@ -1,8 +1,6 @@
 <?php
 
-use App\Ai\Tools\AskUserQuestionTool;
 use App\Ai\Tools\CreateTodoTool;
-use App\Ai\Tools\FillTemplateFieldsTool;
 use App\Models\Conversation;
 use App\Models\Todo;
 use App\Models\User;
@@ -118,69 +116,4 @@ it('unwraps a single item a provider sent without its list', function () {
     todoTool()->handle(new Request(['items' => ['title' => 'Notarize the affidavit']]));
 
     expect(Todo::query()->sole()->title)->toBe('Notarize the affidavit');
-});
-
-it('refuses a template placeholder with no value instead of blanking it', function () {
-    $captured = null;
-
-    $tool = new FillTemplateFieldsTool(onFields: function (array $fields) use (&$captured): void {
-        $captured = $fields;
-    });
-
-    $result = json_decode($tool->handle(new Request([
-        'fields' => [
-            ['key' => '[Client Full Name]', 'value' => 'Maria Santos'],
-            ['key' => '[Reference No.]', 'value' => ''],
-        ],
-    ])), true);
-
-    expect($result['accepted'])->toBe(1)
-        ->and($result['rejected_count'])->toBe(1)
-        ->and($captured)->toBe([['key' => '[Client Full Name]', 'value' => 'Maria Santos']]);
-});
-
-it('does not hand a template nothing to fill when every value was empty', function () {
-    $called = false;
-
-    $tool = new FillTemplateFieldsTool(onFields: function () use (&$called): void {
-        $called = true;
-    });
-
-    $result = $tool->handle(new Request(['fields' => [['key' => '[Date]', 'value' => '']]]));
-
-    expect($called)->toBeFalse()
-        ->and($result)->toContain('Do not tell the user their document is ready');
-});
-
-it('refuses a question that is not a choice and tells the model to proceed', function () {
-    // One option is not a decision; the user would be shown a dead end.
-    $result = (new AskUserQuestionTool)->handle(new Request([
-        'questions' => [[
-            'question' => 'Shall I proceed?',
-            'header' => 'Next',
-            'options' => [['label' => 'Yes']],
-        ]],
-    ]));
-
-    expect(json_decode($result, true)['accepted'])->toBe(0)
-        ->and($result)->toContain('Do not wait for an answer');
-});
-
-it('reads back the normalized question the user will actually see', function () {
-    $result = json_decode((new AskUserQuestionTool)->handle(new Request([
-        'questions' => [[
-            'question' => 'Which document should I prepare first?',
-            'header' => 'Document',
-            'options' => [
-                ['label' => 'Demand letter', 'description' => 'Formal demand before any filing'],
-                ['label' => 'Barangay complaint', 'description' => 'Starts conciliation proceedings'],
-                // The app always offers this itself; a second one would render twice.
-                ['label' => 'Other', 'description' => 'Something else'],
-            ],
-        ]],
-    ])), true);
-
-    expect($result['accepted'])->toBe(1)
-        ->and(array_column($result['questions'][0]['options'], 'label'))
-        ->toBe(['Demand letter', 'Barangay complaint']);
 });

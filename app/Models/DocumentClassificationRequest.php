@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 #[Fillable([
     'document_id',
-    'prompt',
+    'excerpt',
     'status',
     'batch_id',
     'error',
@@ -27,7 +27,7 @@ class DocumentClassificationRequest extends Model
     /** Queued, not yet part of a batch. */
     public const STATUS_PENDING = 'pending';
 
-    /** Sent to Anthropic; waiting for the batch to end. */
+    /** Sent to ai-provider; waiting for the batch to end. */
     public const STATUS_SUBMITTED = 'submitted';
 
     /** Answered, and the answer applied to the document. */
@@ -42,9 +42,9 @@ class DocumentClassificationRequest extends Model
     protected function casts(): array
     {
         return [
-            // The prompt carries the opening of the document. Documents are
-            // stored encrypted, so this is too.
-            'prompt' => 'encrypted',
+            // The excerpt is the opening of the document. Documents are stored
+            // encrypted, so this is too.
+            'excerpt' => 'encrypted',
             'submitted_at' => 'datetime',
             'completed_at' => 'datetime',
         ];

@@ -167,3 +167,31 @@ it('prefers an observed per-message cost over the token model', function () {
     expect($e['message_cost_pesos'])->toBe(9.99)
         ->and($e['ai_cogs_pesos'])->toBe(round(9.99 * 200, 2));
 });
+
+// The command used to hardcode ₱57/USD while the app budgeted at
+// config('billing.fx_usd_php'), so its margins were converted at a rate the
+// product never used. It now takes the configured rate unless one is passed.
+it('converts at the rate the app budgets with when no rate is given', function () {
+    config(['billing.fx_usd_php' => 61.5]);
+
+    $this->artisan('costing:earnings')
+        ->expectsOutputToContain('₱61.50/USD')
+        ->assertSuccessful();
+});
+
+it('lets an explicit exchange rate override the configured one', function () {
+    config(['billing.fx_usd_php' => 61.5]);
+
+    $this->artisan('costing:earnings', ['--exchange-rate' => 70])
+        ->expectsOutputToContain('₱70.00/USD')
+        ->assertSuccessful();
+});
+
+it('costs a budget-gated tier against its allowance, not a null message cap', function () {
+    // Paid tiers carry no message count, so the old basis reported 0 messages
+    // and therefore ₱0.00 of AI costs. The allowance is the real ceiling and is
+    // translated back into the messages it buys.
+    $this->artisan('costing:earnings')
+        ->expectsOutputToContain('full monthly allowance is consumed')
+        ->assertSuccessful();
+});

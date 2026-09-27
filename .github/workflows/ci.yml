@@ -11,11 +11,24 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  APP_ENV: testing
   DB_CONNECTION: pgsql
   DB_HOST: 127.0.0.1
   DB_PORT: 5432
+  DB_DATABASE: testing
   DB_USERNAME: postgres
   DB_PASSWORD: postgres
+  AI_CHAT_PROVIDER: ollama
+  AI_CHAT_ENGINE: laravel
+  AI_BATCH_ENGINE: laravel
+  AI_EMBED_PROVIDER: ollama
+  AI_EMBED_MODEL: qwen3-embedding:latest
+  DOCUMENT_CLASSIFICATION_ENABLED: 'false'
+  LEGAL_CRAWLER_BLOCK_PRIVATE_ADDRESSES: 'false'
+  CACHE_STORE: array
+  MAIL_MAILER: array
+  QUEUE_CONNECTION: sync
+  SESSION_DRIVER: array
 
 jobs:
   tests:
@@ -61,6 +74,9 @@ jobs:
 
       - name: Create testing database
         run: docker exec "${{ job.services.postgres.id }}" createdb -U postgres testing
+
+      - name: Pint
+        run: vendor/bin/pint --test --format agent
 
       - name: Run tests
         run: php artisan test

@@ -134,6 +134,19 @@ class LegalCase extends Model
             ->orderBy('users.name');
     }
 
+    public function clients(): BelongsToMany
+    {
+        return $this->belongsToMany(Client::class, 'case_client', 'case_id', 'client_id')
+            ->using(CaseClient::class)
+            ->withPivot(['relationship_type', 'is_primary', 'attached_by_user_id'])
+            ->withTimestamps();
+    }
+
+    public function caseClients(): HasMany
+    {
+        return $this->hasMany(CaseClient::class, 'case_id');
+    }
+
     /**
      * Whether the user holds this case, either as its owner or as someone
      * assigned to it. The single question every access check asks.

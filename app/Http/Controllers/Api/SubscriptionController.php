@@ -403,6 +403,11 @@ class SubscriptionController extends Controller
                 'pending_plan_interval' => null,
                 'pending_plan_checkout_url' => null,
                 'cancelled_at' => now(),
+                // Stamp the local decision with a provider-event timestamp so
+                // the webhook ordering guard can drop a stale ACTIVE event.
+                // Without it a delayed BILLING.SUBSCRIPTION.UPDATED could
+                // resurrect a subscription the user just cancelled.
+                'paypal_last_event_at' => now(),
             ]);
 
             // Cancelling drops the account below the tiers that carry add-ons, so

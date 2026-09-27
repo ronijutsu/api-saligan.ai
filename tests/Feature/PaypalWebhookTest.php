@@ -9,9 +9,15 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
-    $this->user = User::factory()->create();
+    // The entitlement sync branches on the subscription's organization, so an
+    // organization-backed subscription is what these events describe. Without
+    // it the controller takes the per-user branch and the org assertions below
+    // can never be satisfied.
+    $this->organization = Organization::factory()->create();
+    $this->user = User::factory()->ownerOf($this->organization)->create();
     $this->plan = Plan::factory()->standard()->create();
     $this->subscription = Subscription::factory()->for($this->user)->create([
+        'organization_id' => $this->organization->id,
         'plan_id' => $this->plan->id,
         'gateway' => Subscription::GATEWAY_PAYPAL,
         'paypal_subscription_id' => 'I-SUB-123',

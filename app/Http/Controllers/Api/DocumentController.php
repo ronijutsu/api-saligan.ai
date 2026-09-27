@@ -17,6 +17,7 @@ use App\Services\Billing\AiBudget;
 use App\Services\Billing\AiCosting;
 use App\Services\Crawler\LegalDigestService;
 use App\Services\Documents\DocumentEncryptor;
+use App\Services\Documents\DocumentIndexQuota;
 use App\Support\PlanFeatures;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,6 +32,7 @@ class DocumentController extends Controller
 {
     public function __construct(
         private readonly DocumentEncryptor $encryptor,
+        private readonly DocumentIndexQuota $quota,
     ) {
         //
     }
@@ -117,6 +119,18 @@ class DocumentController extends Controller
             LabelKind::DocumentCategory,
         );
 
+        // The index is a finite resource that outlives the month's AI budget,
+        // so a full account is told now rather than after the upload has been
+        // accepted and the queue has tried to embed it.
+        if (! $this->quota->hasRoom($request->user())) {
+            abort(422, sprintf(
+                'Your document index is full: %s of %s passages are in use. '
+                .'Delete documents you no longer need, then upload again.',
+                number_format($this->quota->used($request->user())),
+                number_format($this->quota->limit()),
+            ));
+        }
+
         if (isset($validated['case_id'])) {
             $case = LegalCase::findOrFail($validated['case_id']);
             $this->authorize('update', $case);
@@ -146,7 +160,6 @@ class DocumentController extends Controller
             $request->user(),
             AiUsage::OPERATION_INGEST,
             AiCosting::estimateFor($isImage ? 'ingest_scan' : 'ingest_text'),
-            context: ['engine' => config('saligan.ai_provider.batch_engine')],
         );
 
         $originalFilename = $file->getClientOriginalName();
@@ -240,6 +253,25 @@ class DocumentController extends Controller
         $case = LegalCase::findOrFail($validated['case_id']);
         $this->authorize('update', $case);
 
+        // Being allowed to read a document and update a case is not the same as
+        // being allowed to join the two: filing it puts the document on that
+        // case's shelf, where everyone on the case can read it. So a document
+        // already held by an organization's case may only be filed into another
+        // case of the same organization — without this, someone on a firm
+        // matter could move a client's document to a case outside the firm and
+        // keep reading it once their firm access ends. A document that no
+        // organization holds yet (a personal library upload) is unconstrained:
+        // it is joining a shelf, not leaving one.
+        $currentCase = $document->case;
+
+        if ($currentCase?->organization_id !== null) {
+            abort_unless(
+                $case->organization_id === $currentCase->organization_id,
+                403,
+                'A document can only be filed into a case in the same organization.',
+            );
+        }
+
         $document->update(['case_id' => $case->id]);
 
         return new DocumentResource($document->loadCount('chunks'));
@@ -267,7 +299,6 @@ class DocumentController extends Controller
             $request->user(),
             AiUsage::OPERATION_INGEST,
             AiCosting::estimateFor(str_starts_with((string) $document->mime_type, 'image/') ? 'ingest_scan' : 'ingest_text'),
-            context: ['engine' => config('saligan.ai_provider.batch_engine')],
         );
 
         $document->update([

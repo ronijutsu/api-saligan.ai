@@ -34,6 +34,10 @@ class OAuthStateStore
             'purpose' => $purpose,
             'capability' => $capability,
             'nonce' => (string) Str::uuid(),
+            // PKCE verifier (RFC 7636: 43–128 unreserved characters). It lives
+            // only inside the encrypted state, so the browser carrying the
+            // state never sees it in the clear.
+            'code_verifier' => Str::random(64),
             'expires_at' => now()->addMinutes((int) config('integrations.state_ttl_minutes', 10))->toIso8601String(),
         ];
 
@@ -43,17 +47,30 @@ class OAuthStateStore
     }
 
     /**
+     * The PKCE S256 code challenge for a state issued by this store.
+     */
+    public function codeChallenge(string $state): ?string
+    {
+        $verifier = $this->decode($state)['code_verifier'] ?? null;
+
+        if (! is_string($verifier) || $verifier === '') {
+            return null;
+        }
+
+        return rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    }
+
+    /**
      * Read a state back. Returns null when it cannot be decrypted, has
      * expired, or names a provider or user that does not exist.
      *
-     * @return array{user_id: int, provider: IntegrationProvider, purpose: string, capability: string|null}|null
+     * @return array{user_id: int, provider: IntegrationProvider, purpose: string, capability: string|null, code_verifier: string|null}|null
      */
     public function consume(string $state): ?array
     {
-        try {
-            $json = Crypt::decryptString(base64_decode(strtr($state, '-_', '+/'), true) ?: throw new \InvalidArgumentException);
-            $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\Throwable) {
+        $payload = $this->decode($state);
+
+        if ($payload === null) {
             return null;
         }
 
@@ -72,6 +89,21 @@ class OAuthStateStore
             'provider' => $provider,
             'purpose' => $payload['purpose'],
             'capability' => $payload['capability'] ?? null,
+            'code_verifier' => $payload['code_verifier'] ?? null,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function decode(string $state): ?array
+    {
+        try {
+            $json = Crypt::decryptString(base64_decode(strtr($state, '-_', '+/'), true) ?: throw new \InvalidArgumentException);
+
+            return json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

@@ -70,6 +70,7 @@ class User extends Authenticatable
             'is_admin' => 'boolean',
             'kyc_completed_at' => 'datetime',
             'tour_completed_at' => 'datetime',
+            'lifecycle_emails_opted_out_at' => 'datetime',
             'terms_accepted_at' => 'datetime',
             'marketing_opt_in' => 'boolean',
             'last_used_at' => 'datetime',

@@ -29,15 +29,52 @@ abstract class TestCase extends BaseTestCase
     protected function setUp(): void
     {
         $cache = __DIR__.'/../bootstrap/cache/config.php';
+        $environment = getenv('APP_ENV') ?: ($_ENV['APP_ENV'] ?? null);
+        $database = getenv('DB_DATABASE') ?: ($_ENV['DB_DATABASE'] ?? null);
+        $databaseUrl = getenv('DB_URL') ?: ($_ENV['DB_URL'] ?? null);
+
+        if ($environment !== 'testing' || $database !== 'testing') {
+            $this->fail(
+                'The test suite requires APP_ENV=testing and DB_DATABASE=testing. '
+                .'Run it with the project test environment before RefreshDatabase can run.',
+            );
+        }
+
+        if ($databaseUrl !== null && $databaseUrl !== '') {
+            $this->fail(
+                'The test suite requires an empty DB_URL so the testing database name cannot be overridden. '
+                .'Run it with the project test environment before RefreshDatabase can run.',
+            );
+        }
 
         if (file_exists($cache)) {
             $cached = require $cache;
-            $environment = $cached['app']['env'] ?? 'unknown';
+            $cachedEnvironment = $cached['app']['env'] ?? 'unknown';
 
-            if ($environment !== 'testing') {
+            if ($cachedEnvironment !== 'testing') {
                 $this->fail(
-                    "The config is cached for the [{$environment}] environment, so this suite would "
+                    "The config is cached for the [{$cachedEnvironment}] environment, so this suite would "
                     .'run against that environment\'s database and RefreshDatabase would drop it. '
+                    .'Run `php artisan config:clear` before the suite.',
+                );
+            }
+
+            $cachedDatabase = $cached['database'] ?? [];
+            $defaultConnection = $cachedDatabase['default'] ?? null;
+            $cachedConnection = is_string($defaultConnection)
+                ? ($cachedDatabase['connections'][$defaultConnection] ?? [])
+                : [];
+
+            if (($cachedConnection['url'] ?? null) !== null && $cachedConnection['url'] !== '') {
+                $this->fail(
+                    'The cached test config contains a DB_URL, so the testing database name could be overridden. '
+                    .'Run `php artisan config:clear` before the suite.',
+                );
+            }
+
+            if (($cachedConnection['database'] ?? null) !== 'testing') {
+                $this->fail(
+                    'The cached test config does not point at the testing database. '
                     .'Run `php artisan config:clear` before the suite.',
                 );
             }

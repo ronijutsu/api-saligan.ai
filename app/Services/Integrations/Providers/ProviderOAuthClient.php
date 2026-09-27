@@ -13,16 +13,19 @@ interface ProviderOAuthClient
     /**
      * The URL the user is redirected to for consent.
      *
+     * `$codeChallenge` is the PKCE S256 challenge (RFC 7636). Both providers
+     * recommend PKCE for confidential web apps too, not only public clients.
+     *
      * @param  list<string>  $scopes
      */
-    public function authorizationUrl(array $scopes, string $state, string $redirectUri): string;
+    public function authorizationUrl(array $scopes, string $state, string $redirectUri, ?string $codeChallenge = null): string;
 
     /**
      * Exchange the consent-screen code for tokens.
      *
      * @return array{access_token: string, refresh_token: string|null, expires_in: int|null, scope: string|null}
      */
-    public function exchangeCode(string $code, string $redirectUri): array;
+    public function exchangeCode(string $code, string $redirectUri, ?string $codeVerifier = null): array;
 
     /**
      * Trade the refresh token for a fresh access token.

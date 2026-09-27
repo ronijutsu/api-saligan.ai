@@ -390,8 +390,8 @@ HTML;
     protected function stripDisclaimer(string $body): string
     {
         // Strip the disclaimer with various formatting: plain text, bold, or
-        // wrapped in asterisks. The disclaimer text is a fixed string set in
-        // ChatService so we match it literally.
+        // wrapped in asterisks. The disclaimer text is a fixed string in the
+        // chat prompt, so we match it literally.
         $patterns = [
             '/\s*Disclaimer:\s*I\'m a legal research and drafting-support assistant,\s*not a licensed Philippine attorney\.\s*This analysis should be reviewed by your lawyer before use in negotiation or litigation\.?\s*/i',
             '/\s*\*+\s*Disclaimer:\s*I\'m a legal research and drafting-support assistant,\s*not a licensed Philippine attorney\.\s*This analysis should be reviewed by your lawyer before use in negotiation or litigation\.?\s*\*+\s*/i',

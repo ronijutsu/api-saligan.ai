@@ -48,7 +48,6 @@ class TextRewriteController extends Controller
         // it rather than billing for nothing.
         $reservation = AiBudget::reserve($request->user(), AiUsage::OPERATION_REWRITE, context: [
             'conversation_id' => $conversation?->id,
-            'engine' => config('saligan.ai_provider.batch_engine'),
         ]);
 
         try {

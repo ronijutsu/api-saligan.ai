@@ -61,5 +61,36 @@ class LegalSourceSeeder extends Seeder
                 $source,
             );
         }
+
+        // Registered so a page cited from one of these publishers can be
+        // captured (the capture job attaches a page to the source that owns
+        // its domain), but not crawled site-wide until an admin switches the
+        // source on. Created once and never overwritten, so re-seeding cannot
+        // undo an admin's choice.
+        $onDemand = [
+            ['Senate of the Philippines', 'senate.gov.ph', LegalSourceCategory::Law],
+            ['Congress of the Philippines', 'congress.gov.ph', LegalSourceCategory::Law],
+            ['Court of Appeals', 'ca.judiciary.gov.ph', LegalSourceCategory::Jurisprudence],
+            ['Department of Labor and Employment', 'dole.gov.ph', LegalSourceCategory::Issuance],
+            ['Securities and Exchange Commission', 'sec.gov.ph', LegalSourceCategory::Issuance],
+            ['Department of Justice', 'doj.gov.ph', LegalSourceCategory::Issuance],
+            ['National Privacy Commission', 'privacy.gov.ph', LegalSourceCategory::Issuance],
+            ['Department of Human Settlements and Urban Development', 'dhsud.gov.ph', LegalSourceCategory::Issuance],
+            ['Intellectual Property Office of the Philippines', 'ipophil.gov.ph', LegalSourceCategory::Issuance],
+            ['Bureau of Internal Revenue', 'bir.gov.ph', LegalSourceCategory::Issuance],
+            ['Department of Environment and Natural Resources', 'denr.gov.ph', LegalSourceCategory::Issuance],
+        ];
+
+        foreach ($onDemand as [$name, $domain, $category]) {
+            LegalSource::firstOrCreate(
+                ['base_domain' => $domain],
+                [
+                    'name' => $name,
+                    'seed_urls' => ["https://www.{$domain}/"],
+                    'category' => $category,
+                    'is_active' => false,
+                ],
+            );
+        }
     }
 }

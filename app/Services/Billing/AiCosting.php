@@ -40,11 +40,27 @@ final class AiCosting
 
     /**
      * Modeled flat add-ons for ingestion steps the providers do not count
-     * back: vision OCR (no per-page metering on this path) and the filing
-     * classifier. Deliberately small and documented — they complete the
-     * ingestion ledger, and any sustained drift shows up against invoices.
+     * back: vision OCR and the filing classifier. Deliberately small and
+     * documented — they complete the ingestion ledger, and any sustained drift
+     * shows up against invoices.
      */
     public const OCR_ADDON_USD = 0.02;
+
+    /**
+     * Vision OCR runs once per page, so it is charged per page. The flat
+     * `OCR_ADDON_USD` above priced a 300-page scan the same as a one-page
+     * photo, which is how a single upload could spend a month's allowance
+     * while the ledger recorded two cents.
+     */
+    public const OCR_USD_PER_PAGE = 0.02;
+
+    /**
+     * Cost of OCR for a known page count.
+     */
+    public static function ocrCostUsd(int $pages): float
+    {
+        return max(0, $pages) * self::OCR_USD_PER_PAGE;
+    }
 
     public const CLASSIFY_ADDON_USD = 0.006;
 

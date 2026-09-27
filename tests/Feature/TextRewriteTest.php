@@ -1,9 +1,9 @@
 <?php
 
-use App\Ai\TextRewriteAgent;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
+use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
     $this->user = User::factory()->create();
@@ -13,7 +13,7 @@ beforeEach(function () {
 });
 
 it('rewrites a passage through the agent and returns the plain text', function () {
-    TextRewriteAgent::fake(['We regret to inform you that your request has been denied.']);
+    fakeRewrite('We regret to inform you that your request has been denied.');
 
     $response = $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -27,7 +27,7 @@ it('rewrites a passage through the agent and returns the plain text', function (
 });
 
 it('unwraps a json-wrapped reply from the provider', function () {
-    TextRewriteAgent::fake(['"Kindly let us know how we may help you."']);
+    fakeRewrite('"Kindly let us know how we may help you."');
 
     $response = $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -43,7 +43,7 @@ it('reports a failure rather than echoing the passage back when every attempt is
     // Handing the original back reaches the editor as a suggestion identical
     // to what is already on screen — indistinguishable, to the reader, from a
     // rewrite that decided no change was needed.
-    TextRewriteAgent::fake(['', '', '']);
+    fakeRewrite('', '', '');
 
     $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -58,7 +58,7 @@ it('treats a structurally empty JSON reply as no answer at all', function () {
     // The Ollama path used to be given `format: json` against a prompt asking
     // for plain text; the models resolved that by answering `{}`, and the
     // extractor passed the literal braces through into the user's letter.
-    TextRewriteAgent::fake(['{}', '   ', 'null']);
+    fakeRewrite('{}', '   ', 'null');
 
     $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -69,7 +69,7 @@ it('treats a structurally empty JSON reply as no answer at all', function () {
 });
 
 it('recovers the passage from a JSON object that does carry one', function () {
-    TextRewriteAgent::fake(['{"text": "The corrected passage."}']);
+    fakeRewrite('{"text": "The corrected passage."}');
 
     $response = $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -82,7 +82,7 @@ it('recovers the passage from a JSON object that does carry one', function () {
 });
 
 it('strips a code fence a model wrapped the passage in', function () {
-    TextRewriteAgent::fake(["```\nThe corrected passage.\n```"]);
+    fakeRewrite("```\nThe corrected passage.\n```");
 
     $response = $this->signInAs($this->user)
         ->postJson('/api/text/rewrite', [
@@ -102,3 +102,19 @@ it('validates the request', function () {
         ])
         ->assertUnprocessable();
 });
+
+/**
+ * Queue the replies the Python rewrite agent will return, one per attempt.
+ *
+ * The provider answers with {"text": "<model output>"}, and the service then
+ * normalizes that output the same way it always has — so the awkward shapes
+ * (json-wrapped, code-fenced, structurally empty) are still exercised here.
+ */
+function fakeRewrite(string ...$replies): void
+{
+    $sequence = Http::fakeSequence('*/agents/rewrite');
+
+    foreach ($replies as $reply) {
+        $sequence->push(['text' => $reply], 200);
+    }
+}

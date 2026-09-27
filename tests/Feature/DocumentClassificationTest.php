@@ -1,6 +1,5 @@
 <?php
 
-use App\Ai\DocumentCategoryAgent;
 use App\Enums\DocumentStatus;
 use App\Enums\LabelKind;
 use App\Jobs\ProcessDocumentUpload;
@@ -21,6 +20,11 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 
+/*
+ * The inline path. Classification runs in ai-provider (ADR-011), so every
+ * answer here is faked at `POST /documents/classify`, which is the boundary the
+ * classifier actually speaks to.
+ */
 beforeEach(function () {
     (new LabelSeeder)->run();
 
@@ -51,12 +55,16 @@ beforeEach(function () {
 
     $this->classify = fn (?Document $document = null) => app(DocumentClassifier::class)
         ->classify($document ?? $this->document, $this->excerpt);
+
+    // One fake per test, never appended: Http::fake() merges stubs and the
+    // first match wins, so a second call would never be reached.
+    $this->returns = fn (array $categories): mixed => Http::fake([
+        '*/documents/classify' => Http::response(['categories' => $categories]),
+    ]);
 });
 
 it('files a document under the categories the model returns', function () {
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'evidence-testimonial', 'confidence' => 0.94]]],
-    ]);
+    ($this->returns)([['slug' => 'evidence-testimonial', 'confidence' => 0.94]]);
 
     ($this->classify)();
 
@@ -69,11 +77,9 @@ it('files a document under the categories the model returns', function () {
 });
 
 it('files a document under every category it genuinely belongs to', function () {
-    DocumentCategoryAgent::fake([
-        ['categories' => [
-            ['slug' => 'pleading', 'confidence' => 0.91],
-            ['slug' => 'procedural-compliance', 'confidence' => 0.78],
-        ]],
+    ($this->returns)([
+        ['slug' => 'pleading', 'confidence' => 0.91],
+        ['slug' => 'procedural-compliance', 'confidence' => 0.78],
     ]);
 
     ($this->classify)();
@@ -83,11 +89,9 @@ it('files a document under every category it genuinely belongs to', function () 
 });
 
 it('drops a category the model is not confident enough about', function () {
-    DocumentCategoryAgent::fake([
-        ['categories' => [
-            ['slug' => 'evidence-testimonial', 'confidence' => 0.88],
-            ['slug' => 'correspondence', 'confidence' => 0.21],
-        ]],
+    ($this->returns)([
+        ['slug' => 'evidence-testimonial', 'confidence' => 0.88],
+        ['slug' => 'correspondence', 'confidence' => 0.21],
     ]);
 
     ($this->classify)();
@@ -96,7 +100,7 @@ it('drops a category the model is not confident enough about', function () {
 });
 
 it('leaves a document unfiled when the model cannot place it', function () {
-    DocumentCategoryAgent::fake([['categories' => []]]);
+    ($this->returns)([]);
 
     ($this->classify)();
 
@@ -107,25 +111,21 @@ it('never overwrites a filing a person made', function () {
     $pleading = Label::where('kind', LabelKind::DocumentCategory)->where('slug', 'pleading')->firstOrFail();
     $this->document->syncLabels([$pleading], $this->user);
 
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'evidence-testimonial', 'confidence' => 0.99]]],
-    ]);
+    Http::fake();
 
     ($this->classify)();
 
     expect($this->document->fresh()->labels->pluck('slug')->all())->toBe(['pleading']);
-    DocumentCategoryAgent::assertNeverPrompted();
+    Http::assertNothingSent();
 });
 
 it('keeps only the most confident categories when the model names too many', function () {
     config(['saligan.documents.classification.max_categories' => 2]);
 
-    DocumentCategoryAgent::fake([
-        ['categories' => [
-            ['slug' => 'pleading', 'confidence' => 0.71],
-            ['slug' => 'evidence-documentary', 'confidence' => 0.95],
-            ['slug' => 'correspondence', 'confidence' => 0.83],
-        ]],
+    ($this->returns)([
+        ['slug' => 'pleading', 'confidence' => 0.71],
+        ['slug' => 'evidence-documentary', 'confidence' => 0.95],
+        ['slug' => 'correspondence', 'confidence' => 0.83],
     ]);
 
     ($this->classify)();
@@ -135,11 +135,9 @@ it('keeps only the most confident categories when the model names too many', fun
 });
 
 it('ignores a category that is not in the vocabulary', function () {
-    DocumentCategoryAgent::fake([
-        ['categories' => [
-            ['slug' => 'invented-category', 'confidence' => 0.99],
-            ['slug' => 'pleading', 'confidence' => 0.81],
-        ]],
+    ($this->returns)([
+        ['slug' => 'invented-category', 'confidence' => 0.99],
+        ['slug' => 'pleading', 'confidence' => 0.81],
     ]);
 
     ($this->classify)();
@@ -157,9 +155,7 @@ it('can file under a category the firm added itself', function () {
         'name' => 'Barangay Conciliation',
     ]);
 
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'barangay-conciliation', 'confidence' => 0.9]]],
-    ]);
+    ($this->returns)([['slug' => 'barangay-conciliation', 'confidence' => 0.9]]);
 
     ($this->classify)($document);
 
@@ -172,9 +168,7 @@ it('cannot file under a category belonging to another firm', function () {
         'name' => "Someone Else's Category",
     ]);
 
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'someone-elses-category', 'confidence' => 0.99]]],
-    ]);
+    ($this->returns)([['slug' => 'someone-elses-category', 'confidence' => 0.99]]);
 
     ($this->classify)();
 
@@ -184,20 +178,16 @@ it('cannot file under a category belonging to another firm', function () {
 it('does not reach a model when classification is switched off', function () {
     config(['saligan.documents.classification.enabled' => false]);
 
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'pleading', 'confidence' => 0.99]]],
-    ]);
+    Http::fake();
 
     ($this->classify)();
 
     expect($this->document->fresh()->labels)->toHaveCount(0);
-    DocumentCategoryAgent::assertNeverPrompted();
+    Http::assertNothingSent();
 });
 
 it('leaves the document unfiled rather than failing when the model errors', function () {
-    DocumentCategoryAgent::fake(function (): never {
-        throw new RuntimeException('the provider is down');
-    });
+    Http::fake(['*/documents/classify' => Http::response(['message' => 'the provider is down'], 500)]);
 
     ($this->classify)();
 
@@ -207,16 +197,15 @@ it('leaves the document unfiled rather than failing when the model errors', func
 it('files an uploaded document as part of ingestion', function () {
     Storage::fake('local');
     Http::fake([
-        '*/api/embed' => fn (Request $request) => Http::response([
+        '*/embeddings' => fn (Request $request) => Http::response([
             'embeddings' => array_map(
                 fn () => array_fill(0, 768, 0.5),
-                $request->data()['input'] ?? [],
+                $request->data()['texts'] ?? [],
             ),
         ], 200),
-    ]);
-
-    DocumentCategoryAgent::fake([
-        ['categories' => [['slug' => 'evidence-testimonial', 'confidence' => 0.93]]],
+        '*/documents/classify' => Http::response([
+            'categories' => [['slug' => 'evidence-testimonial', 'confidence' => 0.93]],
+        ]),
     ]);
 
     Storage::put('documents/affidavit.txt', implode("\n\n", array_fill(0, 20, $this->excerpt)));
@@ -243,17 +232,14 @@ it('files an uploaded document as part of ingestion', function () {
 it('still finishes ingestion when classification fails', function () {
     Storage::fake('local');
     Http::fake([
-        '*/api/embed' => fn (Request $request) => Http::response([
+        '*/embeddings' => fn (Request $request) => Http::response([
             'embeddings' => array_map(
                 fn () => array_fill(0, 768, 0.5),
-                $request->data()['input'] ?? [],
+                $request->data()['texts'] ?? [],
             ),
         ], 200),
+        '*/documents/classify' => Http::response(['message' => 'the provider is down'], 500),
     ]);
-
-    DocumentCategoryAgent::fake(function (): never {
-        throw new RuntimeException('the provider is down');
-    });
 
     Storage::put('documents/affidavit.txt', implode("\n\n", array_fill(0, 20, $this->excerpt)));
 

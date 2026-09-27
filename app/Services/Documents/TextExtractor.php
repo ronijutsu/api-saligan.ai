@@ -26,6 +26,29 @@ use Smalot\PdfParser\Parser as PdfParser;
 class TextExtractor
 {
     /**
+     * The number of pages in the file, for work that is billed per page.
+     *
+     * Vision OCR is the caller: it runs once per page, so the page count is
+     * what the ingestion ledger charges and what the OCR ceiling is checked
+     * against. A PDF states its page count in its own catalogue; anything else
+     * (an image, a DOCX, a text file) counts as a single unit.
+     */
+    public function pageCount(string $fullPath, string $mimeType): int
+    {
+        if ($mimeType !== 'application/pdf') {
+            return 1;
+        }
+
+        try {
+            return max(1, count((new PdfParser)->parseFile($fullPath)->getPages()));
+        } catch (\Throwable) {
+            // An unreadable PDF is about to fail extraction with a proper
+            // message; a page count must not be the thing that throws first.
+            return 1;
+        }
+    }
+
+    /**
      * Extract plain text from a local file based on its MIME type.
      */
     public function extract(string $fullPath, string $mimeType): string

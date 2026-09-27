@@ -17,18 +17,82 @@ env:
   WEBROOT: /home/actions-runner/batayan
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: testing
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      AI_CHAT_PROVIDER: ollama
+      AI_CHAT_ENGINE: laravel
+      AI_BATCH_ENGINE: laravel
+      AI_EMBED_PROVIDER: ollama
+      AI_EMBED_MODEL: qwen3-embedding:latest
+      DOCUMENT_CLASSIFICATION_ENABLED: 'false'
+      LEGAL_CRAWLER_BLOCK_PRIVATE_ADDRESSES: 'false'
+      CACHE_STORE: array
+      MAIL_MAILER: array
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: 1. Check out the revision under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: 2. Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pgsql, pdo_pgsql, intl, zip, gd, pcntl, bcmath
+          coverage: none
+
+      - name: 3. Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: 4. Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          docker exec "${{ job.services.postgres.id }}" createdb -U postgres testing
+
+      - name: 5. Code style
+        run: vendor/bin/pint --test
+
+      - name: 6. Tests
+        run: php artisan test
+
   deploy:
+    needs: verify
     runs-on: [self-hosted, API-BATAYAN-PROD]
     steps:
       - name: 1. Update files
         run: |
           git config --global --add safe.directory "$APP_DIR"
-          git -C "$APP_DIR" fetch origin production
-          git -C "$APP_DIR" reset --hard origin/production
+          git -C "$APP_DIR" fetch origin "${{ github.sha }}"
+          git -C "$APP_DIR" reset --hard "${{ github.sha }}"
         shell: bash
 
-      - name: 2. Composer update
-        run: composer update --no-interaction --prefer-dist --no-progress
+      - name: 2. Composer install
+        run: composer install --no-interaction --prefer-dist --no-progress
         working-directory: ${{ env.APP_DIR }}
         shell: bash
 

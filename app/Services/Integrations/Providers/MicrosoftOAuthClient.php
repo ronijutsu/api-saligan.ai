@@ -11,15 +11,15 @@ use Illuminate\Support\Facades\Http;
  *
  * Microsoft rotates refresh tokens on every use, so a refresh must always
  * store the newest one the answer carries. It also publishes no endpoint that
- * revokes a delegated token on demand — disconnecting ends the session and
- * deletes the stored credentials, and a tenant admin can revoke the grant in
- * Entra if a hard revocation is needed.
+ * revokes one app's delegated token on demand — disconnecting deletes the
+ * stored credentials, and a tenant admin can remove the grant in Entra if a
+ * hard revocation is needed.
  */
 class MicrosoftOAuthClient implements ProviderOAuthClient
 {
-    public function authorizationUrl(array $scopes, string $state, string $redirectUri): string
+    public function authorizationUrl(array $scopes, string $state, string $redirectUri, ?string $codeChallenge = null): string
     {
-        return $this->endpoint('authorize').'?'.http_build_query([
+        return $this->endpoint('authorize').'?'.http_build_query(array_filter([
             'client_id' => config('integrations.microsoft.client_id'),
             'redirect_uri' => $redirectUri,
             'response_type' => 'code',
@@ -28,16 +28,20 @@ class MicrosoftOAuthClient implements ProviderOAuthClient
             // Ask again even for a known user, so an incremental round-trip can
             // add scopes to a connection that already consented once.
             'prompt' => 'consent',
-        ]);
+            'response_mode' => 'query',
+            'code_challenge' => $codeChallenge,
+            'code_challenge_method' => $codeChallenge !== null ? 'S256' : null,
+        ], fn ($value) => $value !== null));
     }
 
-    public function exchangeCode(string $code, string $redirectUri): array
+    public function exchangeCode(string $code, string $redirectUri, ?string $codeVerifier = null): array
     {
-        $response = $this->tokenRequest([
+        $response = $this->tokenRequest(array_filter([
             'grant_type' => 'authorization_code',
             'code' => $code,
             'redirect_uri' => $redirectUri,
-        ]);
+            'code_verifier' => $codeVerifier,
+        ], fn ($value) => $value !== null));
 
         return $this->tokenPayload($response);
     }
@@ -53,17 +57,15 @@ class MicrosoftOAuthClient implements ProviderOAuthClient
     }
 
     /**
-     * Microsoft publishes no on-demand revocation for delegated tokens; the
-     * closest thing is ending the session. The stored credentials are deleted
-     * either way, which is what actually severs the connection.
+     * Microsoft has no endpoint that revokes a single app's delegated tokens.
+     * `/oauth2/v2.0/logout` is a browser sign-out redirect, not a token API,
+     * and Graph's `revokeSignInSessions` would sign the user out of every app
+     * they use — far beyond disconnecting Batayan. So nothing is sent; the
+     * caller deletes the stored credentials, which is what severs the link.
      */
     public function revokeToken(string $token): bool
     {
-        $response = Http::asForm()->post($this->endpoint('logout'), [
-            'token' => $token,
-        ]);
-
-        return $response->successful();
+        return false;
     }
 
     public function accountInfo(string $accessToken): array
@@ -127,7 +129,21 @@ class MicrosoftOAuthClient implements ProviderOAuthClient
             'access_token' => (string) $json['access_token'],
             'refresh_token' => $json['refresh_token'] ?? null,
             'expires_in' => isset($json['expires_in']) ? (int) $json['expires_in'] : null,
-            'scope' => $json['scope'] ?? null,
+            'scope' => isset($json['scope']) ? $this->normalizeScopes((string) $json['scope']) : null,
         ];
+    }
+
+    /**
+     * Graph scopes can come back resource-qualified
+     * (`https://graph.microsoft.com/Sites.Read.All`) while the catalogue uses
+     * the short form; strip the prefix so granted-scope checks compare like
+     * with like.
+     */
+    protected function normalizeScopes(string $scope): string
+    {
+        return implode(' ', array_map(
+            fn (string $s) => preg_replace('#^https://graph\.microsoft\.com/#i', '', $s),
+            preg_split('/\s+/', trim($scope)) ?: [],
+        ));
     }
 }

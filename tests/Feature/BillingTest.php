@@ -340,8 +340,8 @@ it('returns PHP-only pricing and usage fields from subscription endpoints', func
 
     $response = $this->signInAs($this->user)->getJson('/api/subscription')->assertOk();
 
-    $response->assertJsonPath('data.plan.ai_budget_label', '5x usage')
-        ->assertJsonPath('data.plan.ai_usage_multiplier', 5)
+    $response->assertJsonPath('data.plan.ai_budget_label', '3x usage')
+        ->assertJsonPath('data.plan.ai_usage_multiplier', 3)
         ->assertJsonMissingPath('data.plan.ai_budget_pesos')
         ->assertJsonMissingPath('data.plan.ai_budget_usd_cents')
         ->assertJsonMissingPath('data.plan.ai_budget_usd')

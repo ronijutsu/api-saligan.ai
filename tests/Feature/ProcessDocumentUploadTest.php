@@ -2,6 +2,7 @@
 
 use App\Enums\DocumentStatus;
 use App\Exceptions\DocumentProcessingException;
+use App\Jobs\Middleware\LimitUserIngestConcurrency;
 use App\Jobs\ProcessDocumentUpload;
 use App\Models\Document;
 use App\Models\DocumentChunk;
@@ -41,8 +42,8 @@ function userWhoReadsScans(): User
 beforeEach(function () {
     Storage::fake('local');
     Http::fake([
-        '*/api/embed' => function (Request $request) {
-            $inputs = $request->data()['input'] ?? [];
+        '*/embeddings' => function (Request $request) {
+            $inputs = $request->data()['texts'] ?? [];
 
             return Http::response([
                 'embeddings' => array_map(
@@ -306,6 +307,10 @@ it('fails loudly when the embedding count does not match the chunk count', funct
     ]);
 
     $embeddings = Mockery::mock(EmbeddingService::class);
+    // The job checks the index's model before embedding and records the one it
+    // used; this test is about the count mismatch, so both are satisfied.
+    $embeddings->shouldReceive('assertModelMatchesIndex')->once()->andReturnNull();
+    $embeddings->shouldReceive('model')->andReturn('ollama/qwen3-embedding:latest');
     $embeddings->shouldReceive('embedMany')->once()->andReturn([array_fill(0, 768, 0.5)]);
 
     $job = new ProcessDocumentUpload($document);
@@ -365,8 +370,9 @@ it('prevents two workers from processing the same document at once', function ()
 
     $middleware = (new ProcessDocumentUpload($document))->middleware();
 
-    expect($middleware)->toHaveCount(1)
-        ->and($middleware[0])->toBeInstanceOf(WithoutOverlapping::class);
+    expect($middleware)->toHaveCount(2)
+        ->and($middleware[0])->toBeInstanceOf(LimitUserIngestConcurrency::class)
+        ->and($middleware[1])->toBeInstanceOf(WithoutOverlapping::class);
 });
 
 it('scans a PDF with no text layer instead of rejecting it', function () {
@@ -384,6 +390,7 @@ it('scans a PDF with no text layer instead of rejecting it', function () {
 
     $extractor = Mockery::mock(TextExtractor::class);
     $extractor->shouldReceive('extractMarkdown')->once()->andReturn('   ');
+    $extractor->shouldReceive('pageCount')->once()->andReturn(1);
 
     $ocr = Mockery::mock(ImageOcrExtractor::class);
     $ocr->shouldReceive('extract')
@@ -418,6 +425,7 @@ it('fails a PDF only after scanning it has also come up empty', function () {
 
     $extractor = Mockery::mock(TextExtractor::class);
     $extractor->shouldReceive('extractMarkdown')->once()->andReturn('');
+    $extractor->shouldReceive('pageCount')->once()->andReturn(1);
 
     $ocr = Mockery::mock(ImageOcrExtractor::class);
     $ocr->shouldReceive('extract')->once()->andReturn('');

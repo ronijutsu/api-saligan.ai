@@ -6,6 +6,7 @@ use App\Ai\Tools\CreateTodoTool;
 use App\Ai\Tools\FlagAdvisoriesTool;
 use App\Enums\ChatProvider;
 use App\Enums\MessageRole;
+use App\Jobs\CaptureCitedLegalPage;
 use App\Models\Advisory;
 use App\Models\AiUsage;
 use App\Models\Conversation;
@@ -17,6 +18,7 @@ use App\Services\Billing\AiBudget;
 use App\Services\MatterMemory\MatterMemoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -57,9 +59,20 @@ class InternalAiController extends Controller
         $result = DB::transaction(function () use ($conversation, $validated): array {
             Conversation::query()->whereKey($conversation->id)->lockForUpdate()->firstOrFail();
 
+            // Idempotency belongs to this conversation. A UUID supplied by a
+            // different turn must never make this callback silently report
+            // success for another thread.
             $existing = Message::query()->find($validated['message_id']);
 
             if ($existing !== null) {
+                if ((string) $existing->conversation_id !== (string) $conversation->id) {
+                    abort(409, 'Message id belongs to another conversation.');
+                }
+
+                if ($existing->role !== MessageRole::Assistant) {
+                    abort(409, 'Message id belongs to another message.');
+                }
+
                 return [
                     'ok' => true,
                     'message_id' => $existing->id,
@@ -76,12 +89,13 @@ class InternalAiController extends Controller
             ]);
 
             $metadata = $validated['metadata'] ?? [];
+            $provider = ChatProvider::tryFrom($validated['provider'] ?? '');
             $assistantMessage = Message::create([
                 'id' => $validated['message_id'],
                 'conversation_id' => $conversation->id,
                 'role' => MessageRole::Assistant,
                 'content' => trim($validated['assistant']['content']),
-                'provider' => ChatProvider::tryFrom($validated['provider'] ?? '') ?? ChatProvider::Ollama,
+                'provider' => $provider,
                 'cited_chunk_ids' => $metadata['document_chunk_ids'] ?? [],
                 'cited_legal_chunk_ids' => $metadata['legal_chunk_ids'] ?? [],
                 'cited_standard_chunk_ids' => $metadata['standard_chunk_ids'] ?? [],
@@ -100,6 +114,12 @@ class InternalAiController extends Controller
                 ->whereNull('message_id')
                 ->update(['message_id' => $assistantMessage->id]);
 
+            // ai-provider chooses who answers, so the conversation records
+            // the provider that last actually did.
+            if ($provider !== null) {
+                $conversation->update(['provider' => $provider]);
+            }
+
             if ($conversation->title === null) {
                 $title = collect(preg_split('/\R/', $assistantMessage->content) ?: [])
                     ->map(fn (string $line): string => trim($line, " \t\n\r#*"))
@@ -115,10 +135,32 @@ class InternalAiController extends Controller
                 'user_message_id' => $userMessage->id,
                 'message_id' => $assistantMessage->id,
                 'idempotent' => false,
+                'web_citations' => $metadata['web_citations'] ?? [],
             ];
         });
 
-        return response()->json($result);
+        if (! $result['idempotent']) {
+            $this->captureCitedPages($result['web_citations']);
+        }
+
+        return response()->json(Arr::except($result, 'web_citations'));
+    }
+
+    /**
+     * Queue a capture for each official legal page the answer cited from the
+     * web, so the next reader finds it in the knowledge base.
+     */
+    protected function captureCitedPages(mixed $webCitations): void
+    {
+        foreach (is_array($webCitations) ? $webCitations : [] as $citation) {
+            $url = is_array($citation) ? ($citation['url'] ?? null) : null;
+
+            if (! is_string($url) || $url === '' || ! CaptureCitedLegalPage::shouldCapture($url)) {
+                continue;
+            }
+
+            CaptureCitedLegalPage::dispatch($url)->onQueue(config('saligan.crawler.queue'));
+        }
     }
 
     /**

@@ -14,9 +14,9 @@ use Illuminate\Support\Facades\Http;
  */
 class GoogleOAuthClient implements ProviderOAuthClient
 {
-    public function authorizationUrl(array $scopes, string $state, string $redirectUri): string
+    public function authorizationUrl(array $scopes, string $state, string $redirectUri, ?string $codeChallenge = null): string
     {
-        return config('integrations.google.authorize_url').'?'.http_build_query([
+        return config('integrations.google.authorize_url').'?'.http_build_query(array_filter([
             'client_id' => config('integrations.google.client_id'),
             'redirect_uri' => $redirectUri,
             'response_type' => 'code',
@@ -26,16 +26,23 @@ class GoogleOAuthClient implements ProviderOAuthClient
             // to a connection that already consented once.
             'prompt' => 'consent',
             'access_type' => 'offline',
-        ]);
+            // Required for incremental authorization: without it the new
+            // token covers only the scopes in this request, not the ones the
+            // connection already holds.
+            'include_granted_scopes' => 'true',
+            'code_challenge' => $codeChallenge,
+            'code_challenge_method' => $codeChallenge !== null ? 'S256' : null,
+        ], fn ($value) => $value !== null));
     }
 
-    public function exchangeCode(string $code, string $redirectUri): array
+    public function exchangeCode(string $code, string $redirectUri, ?string $codeVerifier = null): array
     {
-        $response = $this->tokenRequest([
+        $response = $this->tokenRequest(array_filter([
             'grant_type' => 'authorization_code',
             'code' => $code,
             'redirect_uri' => $redirectUri,
-        ]);
+            'code_verifier' => $codeVerifier,
+        ], fn ($value) => $value !== null));
 
         return $this->tokenPayload($response);
     }

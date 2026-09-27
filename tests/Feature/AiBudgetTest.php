@@ -166,7 +166,7 @@ it('pools firm spend across the workspace', function () {
 it('uses the configured usage multipliers in the AI endpoint meter', function () {
     $standard = Plan::factory()->standard()->create();
     $firm = Plan::factory()->firm()->create();
-    $this->plan->update(['ai_budget_usd_cents' => 2575]);
+    $this->plan->update(['ai_budget_usd_cents' => 1500]);
     $pro = $this->plan->fresh();
 
     $standardUser = User::factory()->create();
@@ -182,11 +182,11 @@ it('uses the configured usage multipliers in the AI endpoint meter', function ()
     ]);
 
     expect($standard->aiUsageMultiplier())->toBe(1)
-        ->and($pro->aiUsageMultiplier())->toBe(5)
-        ->and($firm->aiUsageMultiplier())->toBe(20)
+        ->and($pro->aiUsageMultiplier())->toBe(3)
+        ->and($firm->aiUsageMultiplier())->toBe(10)
         ->and(AiBudget::snapshot($standardUser)['budget_usd'])->toBe(5.15)
-        ->and(AiBudget::snapshot(budgetUser())['budget_usd'])->toBe(25.75)
-        ->and(AiBudget::snapshot($firmUser)['budget_usd'])->toBe(103.0);
+        ->and(AiBudget::snapshot(budgetUser())['budget_usd'])->toBe(15.0)
+        ->and(AiBudget::snapshot($firmUser)['budget_usd'])->toBe(51.5);
 });
 
 it('ends the trial when its budget runs out', function () {

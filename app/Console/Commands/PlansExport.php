@@ -13,6 +13,23 @@ use Illuminate\Console\Command;
 class PlansExport extends Command
 {
     /**
+     * Where the marketing site keeps the generated plans file, relative to the
+     * API project root. The repository directory is `landing-batayan`, so the
+     * default must not assume the older `landing` name.
+     */
+    public const DEFAULT_RELATIVE_PATH = '../landing-batayan/src/data/plans.json';
+
+    /**
+     * The default export target on the host, where the sibling checkout is
+     * reachable. Kept as a method so the path can be asserted without a
+     * database, and so the copy-paste guidance below can reuse it.
+     */
+    public function defaultPath(): string
+    {
+        return base_path(self::DEFAULT_RELATIVE_PATH);
+    }
+
+    /**
      * The marketing site is a separate build with no API call on its critical
      * path, so its pricing table has always been a hand-kept copy of the
      * seeder — and the two had already drifted apart on what Starter included.
@@ -39,6 +56,8 @@ class PlansExport extends Command
                 'overage_label' => $plan->overage_price === null ? null : $plan->overageLabel(),
                 'ai_budget_label' => $plan->aiBudgetLabel(),
                 'ai_usage_multiplier' => $plan->aiUsageMultiplier(),
+                'allow_top_ups' => $plan->canBuyTopUps(),
+                'topup_label' => $plan->topUpLabel(),
                 'included_seats' => $plan->included_seats,
                 'seat_price' => $plan->seat_price,
                 'seat_price_label' => $plan->seatPriceLabel(),
@@ -59,8 +78,7 @@ class PlansExport extends Command
         // the command runs on the host and not when it runs in the container.
         // Failing with the workaround printed beats failing with a bare
         // "permission denied" from mkdir.
-        $path = (string) ($this->option('path')
-            ?: base_path('../landing/src/data/plans.json'));
+        $path = (string) ($this->option('path') ?: $this->defaultPath());
 
         $directory = dirname($path);
 
@@ -68,7 +86,7 @@ class PlansExport extends Command
             $this->error("Could not write to {$directory} — it is probably outside this container's mount.");
             $this->line('Write it inside the project and copy it across instead:');
             $this->line('  sail artisan plans:export --path=storage/app/plans.json');
-            $this->line('  cp storage/app/plans.json ../landing/src/data/plans.json');
+            $this->line('  cp storage/app/plans.json '.self::DEFAULT_RELATIVE_PATH);
 
             return self::FAILURE;
         }

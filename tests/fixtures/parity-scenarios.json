@@ -1,0 +1,177 @@
+{
+  "version": 2,
+  "description": "Engine-parity scenarios. Laravel resolves what the plan buys from these inputs and emits it on the /internal context contract (v2: no provider or model); ai-provider parses that same context, picks the base or frontier model from it, and must expose exactly the tools it permits under its own deployment switches. Both suites read this file, so a change one service makes without the other fails that service's suite.",
+  "scenarios": [
+    {
+      "id": "base-plan-without-web-search",
+      "setup": {
+        "plan_features": ["drafting"],
+        "template": null,
+        "ai_provider_web_search_enabled": false
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    },
+    {
+      "id": "search-enabled-plan",
+      "setup": {
+        "plan_features": ["drafting", "web_search"],
+        "template": null,
+        "ai_provider_web_search_enabled": true
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search"],
+        "deep_research": false,
+        "web_search_enabled": true,
+        "web_search_max_calls": 2,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": true,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    },
+    {
+      "id": "deep-research-bounds-search",
+      "setup": {
+        "plan_features": ["drafting", "web_search", "deep_research"],
+        "template": null,
+        "ai_provider_web_search_enabled": true
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search", "deep_research"],
+        "deep_research": true,
+        "web_search_enabled": true,
+        "web_search_max_calls": 4,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": true,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    },
+    {
+      "id": "frontier-plan-gets-the-frontier-model",
+      "setup": {
+        "plan_features": ["drafting", "web_search", "deep_research", "frontier_model"],
+        "template": null,
+        "ai_provider_web_search_enabled": true
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search", "deep_research", "frontier_model"],
+        "deep_research": true,
+        "web_search_enabled": true,
+        "web_search_max_calls": 4,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": true,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "frontier"
+    },
+    {
+      "id": "deployment-disables-search-despite-plan",
+      "setup": {
+        "plan_features": ["drafting", "web_search", "deep_research"],
+        "template": null,
+        "ai_provider_web_search_enabled": false
+      },
+      "expected_context": {
+        "capabilities": ["drafting", "web_search", "deep_research"],
+        "deep_research": true,
+        "web_search_enabled": true,
+        "web_search_max_calls": 4,
+        "template_mode": null,
+        "resolved_template": null,
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    },
+    {
+      "id": "explicit-structured-template",
+      "setup": {
+        "plan_features": ["drafting"],
+        "template": {
+          "explicit": true,
+          "mode": "structured"
+        },
+        "ai_provider_web_search_enabled": false
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": "structured",
+        "resolved_template": {
+          "mode": "structured"
+        },
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": false,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    },
+    {
+      "id": "explicit-verbatim-template",
+      "setup": {
+        "plan_features": ["drafting"],
+        "template": {
+          "explicit": true,
+          "mode": "verbatim"
+        },
+        "ai_provider_web_search_enabled": false
+      },
+      "expected_context": {
+        "capabilities": ["drafting"],
+        "deep_research": false,
+        "web_search_enabled": false,
+        "web_search_max_calls": 0,
+        "template_mode": "verbatim",
+        "resolved_template": {
+          "mode": "verbatim"
+        },
+        "has_prompt_identity": true
+      },
+      "expected_tools": {
+        "web_search": false,
+        "fill_template_fields": true,
+        "always": ["create_todo", "flag_advisories"]
+      },
+      "expected_model": "base"
+    }
+  ]
+}

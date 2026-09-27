@@ -1,6 +1,8 @@
 <?php
 
+use App\Enums\ChatProvider;
 use App\Enums\MessageRole;
+use App\Jobs\CaptureCitedLegalPage;
 use App\Models\Advisory;
 use App\Models\Conversation;
 use App\Models\CrawledPage;
@@ -16,13 +18,13 @@ use App\Models\Todo;
 use App\Models\User;
 use App\Support\PlanFeatures;
 use App\Support\UserProfile;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
 beforeEach(function () {
     config([
         'saligan.ai_provider.internal_secret' => 'test-internal-secret',
-        'saligan.chat.provider' => 'ollama',
     ]);
 
     $this->user = User::factory()->create();
@@ -51,7 +53,10 @@ it('returns the prompt-building context', function () {
         ->getJson("/internal/conversations/{$this->conversation->id}/context")
         ->assertOk()
         ->assertJsonPath('user_id', $this->user->id)
-        ->assertJsonPath('provider', 'ollama')
+        ->assertJsonPath('context_contract_version', 2)
+        ->assertJsonPath('plan_tier', 'pro')
+        ->assertJsonMissingPath('provider')
+        ->assertJsonMissingPath('model')
         ->assertJsonPath('messages', []);
 
     expect($response->getContent())->toContain('"recent_intake_values":{}');
@@ -59,7 +64,6 @@ it('returns the prompt-building context', function () {
 
 it('sends plan capabilities and a bounded web-search budget', function () {
     config([
-        'saligan.web_search.enabled' => true,
         'saligan.web_search.base_max_searches' => 2,
         'saligan.web_search.max_searches' => 4,
     ]);
@@ -72,11 +76,9 @@ it('sends plan capabilities and a bounded web-search budget', function () {
     $this->withToken('test-internal-secret')
         ->getJson("/internal/conversations/{$this->conversation->id}/context")
         ->assertOk()
-        ->assertJsonPath('context_contract_version', 1)
         ->assertJsonPath('web_search_enabled', false)
         ->assertJsonPath('web_search_max_calls', 0)
-        ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING])
-        ->assertJsonPath('model', config('saligan.chat.ollama_model'));
+        ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING]);
 
     $searchPlan = Plan::factory()->create([
         'features' => [PlanFeatures::DRAFTING, PlanFeatures::WEB_SEARCH],
@@ -102,14 +104,6 @@ it('sends plan capabilities and a bounded web-search budget', function () {
         ->assertJsonPath('web_search_enabled', true)
         ->assertJsonPath('web_search_max_calls', 4)
         ->assertJsonPath('capabilities', [PlanFeatures::DRAFTING, PlanFeatures::WEB_SEARCH, PlanFeatures::DEEP_RESEARCH]);
-
-    config(['saligan.web_search.enabled' => false]);
-
-    $this->withToken('test-internal-secret')
-        ->getJson("/internal/conversations/{$this->conversation->id}/context")
-        ->assertOk()
-        ->assertJsonPath('web_search_enabled', false)
-        ->assertJsonPath('web_search_max_calls', 0);
 });
 
 it('uses an explicit visible template instead of the case default', function () {
@@ -298,21 +292,78 @@ it('persists a completed turn idempotently', function () {
         ->and($assistant->metadata['activity'][0]['status'])->toBe('composing');
 });
 
-it('maps Meta to a hosted provider the Python service speaks', function () {
-    // Python has no Meta client and rejects the provider outright, so the
-    // context builder must never hand it `meta` — previously it fell through
-    // to Ollama without saying so.
-    config([
-        'saligan.chat.provider' => 'meta',
-        'ai.providers.meta.key' => 'test-meta-key',
-        'ai.providers.gemini.key' => 'test-gemini-key',
+it('does not treat a message id from another conversation as idempotent', function () {
+    $messageId = (string) Str::uuid();
+    $otherConversation = Conversation::factory()->for($this->user)->create();
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => $messageId,
+        'user' => ['content' => 'First turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'First answer.'],
+    ])->assertOk();
+
+    internalAiPost("/internal/conversations/{$otherConversation->id}/messages", [
+        'message_id' => $messageId,
+        'user' => ['content' => 'Second turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'Second answer.'],
+    ])->assertStatus(409);
+});
+
+it('does not treat a user message id as an idempotent assistant callback', function () {
+    $userMessage = Message::factory()->for($this->conversation)->create([
+        'role' => MessageRole::User,
+        'content' => 'Already persisted user turn.',
     ]);
 
-    $this->withToken('test-internal-secret')
-        ->getJson("/internal/conversations/{$this->conversation->id}/context")
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => $userMessage->id,
+        'user' => ['content' => 'Retrying the turn', 'attachment_ids' => []],
+        'assistant' => ['content' => 'This must not overwrite a user message.'],
+    ])->assertStatus(409);
+});
+
+it('records the provider that answered on the conversation', function () {
+    expect($this->conversation->provider)->toBeNull();
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", [
+        'message_id' => (string) Str::uuid(),
+        'provider' => 'openai',
+        'user' => ['content' => 'What does the law say?', 'attachment_ids' => []],
+        'assistant' => ['content' => 'It depends on the governing statute.'],
+    ])->assertOk();
+
+    expect($this->conversation->fresh()->provider)->toBe(ChatProvider::OpenAI);
+});
+
+it('queues a capture for each official page the answer cited', function () {
+    Queue::fake();
+
+    $payload = [
+        'message_id' => (string) Str::uuid(),
+        'provider' => 'gemini',
+        'user' => ['content' => 'What does the law say?', 'attachment_ids' => []],
+        'assistant' => ['content' => 'See the decision [Web 1].'],
+        'metadata' => [
+            'web_citations' => [
+                ['url' => 'https://lawphil.net/judjuris/juri2020/jan2020/gr_123_2020.html', 'title' => 'G.R. No. 123'],
+                ['url' => 'https://example.com/blog/post', 'title' => 'A blog'],
+            ],
+        ],
+    ];
+
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", $payload)
         ->assertOk()
-        ->assertJsonPath('provider', 'gemini')
-        ->assertJsonPath('model', config('saligan.chat.gemini_model'));
+        ->assertJsonMissingPath('web_citations');
+
+    // A retried callback is idempotent and must not queue the capture twice.
+    internalAiPost("/internal/conversations/{$this->conversation->id}/messages", $payload)
+        ->assertOk();
+
+    Queue::assertPushed(CaptureCitedLegalPage::class, 1);
+    Queue::assertPushed(
+        CaptureCitedLegalPage::class,
+        fn (CaptureCitedLegalPage $job): bool => $job->url === 'https://lawphil.net/judjuris/juri2020/jan2020/gr_123_2020.html',
+    );
 });
 
 it('persists the turn usage the provider reports', function () {

@@ -4,7 +4,6 @@ namespace App\Providers;
 
 use App\Auth\SupabaseGuard;
 use App\Services\Auth\SupabaseJwtService;
-use App\Services\Chat\ChatService;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,12 +17,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        // ChatService keeps per-request state (the user and assistant message
-        // IDs it creates/persists so the controller can roll them back).
-        // Scoped resolution guarantees a fresh instance per request and is
-        // flushed between requests under Octane, so state can never leak
-        // across users. Do not change this to a singleton.
-        $this->app->scoped(ChatService::class);
+        //
     }
 
     /**
@@ -66,6 +60,18 @@ class AppServiceProvider extends ServiceProvider
             return [
                 Limit::perHour(20)->by('registration.ip.'.$request->ip()),
                 Limit::perDay(10)->by('registration.email.'.strtolower((string) $request->input('email', ''))),
+            ];
+        });
+
+        // CRM writes are authenticated but still bounded per actor and source
+        // IP. The defaults remain deployment-configurable pending approval of
+        // the final CRM mutation policy.
+        RateLimiter::for('crm-mutation', function (Request $request) {
+            $perMinute = max(1, (int) config('crm.mutations_per_minute', 60));
+
+            return [
+                Limit::perMinute($perMinute)->by('crm-mutation.user.'.($request->user('supabase')?->getAuthIdentifier() ?? 'guest')),
+                Limit::perMinute($perMinute)->by('crm-mutation.ip.'.$request->ip()),
             ];
         });
     }

@@ -38,8 +38,10 @@ class MicrosoftSyncGateway implements ProviderSyncGateway
      */
     protected function syncSharePoint(Integration $integration, string $capability, string $accessToken): array
     {
+        // `search=*` lists every site the account can reach; a keyword would
+        // only match sites whose name or description contains it.
         $response = $this->graph($accessToken)
-            ->get('/sites', ['search' => 'documents'])
+            ->get('/sites', ['search' => '*', '$select' => 'id,name,webUrl'])
             ->throw();
 
         $changed = count($response->json('value', []));
@@ -86,14 +88,13 @@ class MicrosoftSyncGateway implements ProviderSyncGateway
             ? $request->get('/me/drive/root/delta')->throw()
             : $request->get($deltaLink)->throw();
 
-        // Read the OData annotations as literal keys. Response::json($key)
-        // resolves with dot-notation, and Graph's `@odata.deltaLink` /
-        // `@odata.nextLink` keys contain a dot — asking for them by key would
-        // split on it and always miss, dropping the cursor so every sync
-        // re-scanned from the root. Pull the decoded body and index it directly.
+        $changed = count($response->json('value', []));
+        // A page with more to come carries @odata.nextLink; the last page
+        // carries @odata.deltaLink for the next round. Keeping whichever is
+        // present means an interrupted pass resumes rather than restarts.
+        // Read the raw array: json('@odata.deltaLink') would treat the dot as
+        // nesting and look up ['@odata']['deltaLink'], which never exists.
         $body = (array) $response->json();
-
-        $changed = count($body['value'] ?? []);
         $nextDelta = $body['@odata.deltaLink'] ?? $body['@odata.nextLink'] ?? null;
 
         if (is_string($nextDelta) && $nextDelta !== '') {

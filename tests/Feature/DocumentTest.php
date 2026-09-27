@@ -4,6 +4,7 @@ use App\Enums\DocumentStatus;
 use App\Jobs\ProcessDocumentUpload;
 use App\Models\Document;
 use App\Models\LegalCase;
+use App\Models\Organization;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
@@ -18,6 +19,31 @@ beforeEach(function () {
         'plan_id' => Plan::factory()->pro()->create()->id,
     ]);
 });
+
+/**
+ * An organization owner carrying the team subscription the plan gate requires,
+ * so the re-filing guards can be exercised inside a firm's scope.
+ *
+ * @return array{0: Organization, 1: User}
+ */
+function organizationLawyer(): array
+{
+    $organization = Organization::factory()->create();
+    $lawyer = User::factory()->ownerOf($organization)->create();
+
+    // The slug is unique, and this file's beforeEach has already created the
+    // Pro plan — so reuse it rather than inserting a second one.
+    $plan = Plan::query()->firstWhere('slug', Plan::SLUG_PRO)
+        ?? Plan::factory()->pro()->create();
+
+    Subscription::factory()->for($lawyer)->create([
+        'organization_id' => $organization->id,
+        'plan_id' => $plan->id,
+        'seats_purchased' => 5,
+    ]);
+
+    return [$organization, $lawyer];
+}
 
 it('requires authentication', function () {
     $this->getJson('/api/documents')->assertStatus(401);
@@ -264,6 +290,55 @@ it('forbids attaching a document to another user case', function () {
     $this->signInAs($this->user)
         ->postJson("/api/documents/{$document->id}/attach", ['case_id' => $case->id])
         ->assertForbidden();
+});
+
+it('files a firm document into another case in the same organization', function () {
+    [$organization, $lawyer] = organizationLawyer();
+
+    $from = LegalCase::factory()->for($lawyer)->create(['organization_id' => $organization->id]);
+    $to = LegalCase::factory()->for($lawyer)->create(['organization_id' => $organization->id]);
+
+    $document = Document::factory()->for($lawyer)->create(['case_id' => $from->id]);
+
+    $this->signInAs($lawyer)
+        ->postJson("/api/documents/{$document->id}/attach", ['case_id' => $to->id])
+        ->assertOk();
+
+    $this->assertDatabaseHas('documents', ['id' => $document->id, 'case_id' => $to->id]);
+});
+
+it('files an unfiled document into one of the users organization cases', function () {
+    [$organization, $lawyer] = organizationLawyer();
+
+    $document = Document::factory()->for($lawyer)->create(['case_id' => null]);
+    $case = LegalCase::factory()->for($lawyer)->create(['organization_id' => $organization->id]);
+
+    $this->signInAs($lawyer)
+        ->postJson("/api/documents/{$document->id}/attach", ['case_id' => $case->id])
+        ->assertOk();
+});
+
+it('forbids filing an organization document into a personal case', function () {
+    // Every individual permission check passes: the lawyer can read the
+    // document and update their own personal case. What the guard refuses is
+    // the join itself — moving the client's document off the firm's shelf onto
+    // one the firm does not control, which the lawyer would keep after leaving.
+    //
+    // This is the reachable form of the boundary. A move into *another*
+    // organization's case is already impossible: a user belongs to one
+    // organization, so they cannot update a foreign organization's case at all
+    // — the case policy refuses that before this guard is reached.
+    [$organization, $lawyer] = organizationLawyer();
+
+    $firmCase = LegalCase::factory()->for($lawyer)->create(['organization_id' => $organization->id]);
+    $document = Document::factory()->for($lawyer)->create(['case_id' => $firmCase->id]);
+    $personalCase = LegalCase::factory()->for($lawyer)->create(['organization_id' => null]);
+
+    $this->signInAs($lawyer)
+        ->postJson("/api/documents/{$document->id}/attach", ['case_id' => $personalCase->id])
+        ->assertForbidden();
+
+    $this->assertDatabaseHas('documents', ['id' => $document->id, 'case_id' => $firmCase->id]);
 });
 
 it('retries a failed document and re-queues ingestion', function () {

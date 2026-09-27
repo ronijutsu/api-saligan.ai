@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "description": "One SSE contract corpus consumed by the Python provider, the Laravel relay, and the browser parser. 'frames' pins byte-level encoding for every event; 'tool_calls' and 'tool_results' pin the reduced payload each engine is allowed to expose; 'wire_cases' feeds raw bytes through the browser parser with arbitrary chunk boundaries, CRLF, malformed frames, and both failure shapes.",
+  "frames": [
+    {
+      "event": "delta",
+      "data": { "delta": "Kumusta / hello" },
+      "frame": "event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n"
+    },
+    {
+      "event": "delta",
+      "data": { "delta": "Ünïcode — “quotes” 漢字 😀" },
+      "frame": "event: delta\ndata: {\"delta\":\"Ünïcode — “quotes” 漢字 😀\"}\n\n"
+    },
+    {
+      "event": "status",
+      "data": { "status": "composing", "label": "Writing your answer" },
+      "frame": "event: status\ndata: {\"status\":\"composing\",\"label\":\"Writing your answer\"}\n\n"
+    },
+    {
+      "event": "done",
+      "data": { "ok": true, "web_citations": 2 },
+      "frame": "event: done\ndata: {\"ok\":true,\"web_citations\":2}\n\n"
+    },
+    {
+      "event": "done",
+      "data": { "ok": false },
+      "frame": "event: done\ndata: {\"ok\":false}\n\n"
+    },
+    {
+      "event": "error",
+      "data": { "message": "Provider failed" },
+      "frame": "event: error\ndata: {\"message\":\"Provider failed\"}\n\n"
+    },
+    {
+      "event": "notice",
+      "data": { "kind": "web_search", "message": "This answer says the web was checked, but no web search ran for it." },
+      "frame": "event: notice\ndata: {\"kind\":\"web_search\",\"message\":\"This answer says the web was checked, but no web search ran for it.\"}\n\n"
+    },
+    {
+      "event": "citation",
+      "data": { "type": "web", "index": 1, "title": "Rule 70, Rules of Court", "url": "https://lawphil.net/rule-70", "domain": "lawphil.net", "excerpt": "Fifteen days." },
+      "frame": "event: citation\ndata: {\"type\":\"web\",\"index\":1,\"title\":\"Rule 70, Rules of Court\",\"url\":\"https://lawphil.net/rule-70\",\"domain\":\"lawphil.net\",\"excerpt\":\"Fifteen days.\"}\n\n"
+    },
+    {
+      "event": "web_search",
+      "data": { "phase": "start", "query": "prescriptive period under Rule 70" },
+      "frame": "event: web_search\ndata: {\"phase\":\"start\",\"query\":\"prescriptive period under Rule 70\"}\n\n"
+    },
+    {
+      "event": "tool_call",
+      "data": { "name": "request_intake_form", "arguments": { "fields": [{ "name": "recipient", "label": "Recipient" }], "default_values": { "sender": "Atty. Reyes" } } },
+      "frame": "event: tool_call\ndata: {\"name\":\"request_intake_form\",\"arguments\":{\"fields\":[{\"name\":\"recipient\",\"label\":\"Recipient\"}],\"default_values\":{\"sender\":\"Atty. Reyes\"}}}\n\n"
+    },
+    {
+      "event": "letter_draft",
+      "data": { "title": "Demand Letter", "message_id": "msg-1", "content": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Demand" }] }] } },
+      "frame": "event: letter_draft\ndata: {\"title\":\"Demand Letter\",\"message_id\":\"msg-1\",\"content\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Demand\"}]}]}}\n\n"
+    },
+    {
+      "event": "tool_result",
+      "data": { "name": "create_todo", "count": 2 },
+      "frame": "event: tool_result\ndata: {\"name\":\"create_todo\",\"count\":2}\n\n"
+    }
+  ],
+  "tool_calls": [
+    { "tool": "web_search", "arguments": { "query": "private internal query" }, "rendered": null },
+    { "tool": "draft_letter", "arguments": { "request": "Demand P855,000 from Mr. Reyes" }, "rendered": { "name": "draft_letter" } },
+    {
+      "tool": "request_intake_form",
+      "arguments": { "fields": [{ "name": "recipient", "label": "Recipient" }] },
+      "rendered": { "name": "request_intake_form", "arguments": { "fields": [{ "name": "recipient", "label": "Recipient" }] } }
+    },
+    {
+      "tool": "ask_user_question",
+      "arguments": { "questions": [{ "question": "Which venue?" }] },
+      "rendered": { "name": "ask_user_question", "arguments": { "questions": [{ "question": "Which venue?" }] } }
+    }
+  ],
+  "tool_results": [
+    { "tool": "create_todo", "result": "{\"items\":[{\"id\":\"1\"},{\"id\":\"2\"}]}", "rendered": { "name": "create_todo", "count": 2 } },
+    { "tool": "flag_advisories", "result": "{\"items\":[{\"id\":\"1\"}]}", "rendered": { "name": "flag_advisories", "count": 1 } },
+    { "tool": "create_todo", "result": "{\"ok\":true,\"items\":[]}", "rendered": { "name": "create_todo", "count": 0 } },
+    { "tool": "create_todo", "result": "{\"ok\":true}", "rendered": { "name": "create_todo", "count": null } },
+    { "tool": "create_todo", "result": "{\"ok\":false,\"items\":[{\"id\":\"1\"}]}", "rendered": null },
+    { "tool": "flag_advisories", "result": "{\"ok\":false,\"items\":[{\"id\":\"1\"}]}", "rendered": null },
+    { "tool": "create_todo", "result": "not json", "rendered": null },
+    { "tool": "create_todo", "result": null, "rendered": null },
+    { "tool": "web_search", "result": "{\"items\":[{\"id\":\"1\"}]}", "rendered": null }
+  ],
+  "wire_cases": [
+    {
+      "id": "happy-path-with-receipt",
+      "chunks": [
+        "event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n",
+        "event: status\ndata: {\"status\":\"composing\",\"label\":\"Writing your answer\"}\n\n",
+        "event: tool_result\ndata: {\"name\":\"create_todo\",\"count\":2}\n\n",
+        "event: done\ndata: {\"ok\":true,\"web_citations\":2}\n\n"
+      ],
+      "expected": { "text": "Kumusta / hello", "error": "", "completed": true, "receipts": { "tasks": 2 } }
+    },
+    {
+      "id": "crlf-split-across-chunks",
+      "chunks": [
+        "event: delta\r",
+        "\ndata: {\"delta\":\"Kept\"}\r\n\r",
+        "\nevent: done\r\ndata: {\"ok\":true}\r\n\r\n"
+      ],
+      "expected": { "text": "Kept", "error": "", "completed": true }
+    },
+    {
+      "id": "arbitrary-byte-boundaries",
+      "chunks": [
+        "event: del",
+        "ta\ndata: {\"delta\":\"Bounda",
+        "ry\"}\n\nevent: done\ndata: {\"ok\":",
+        "true}\n\n"
+      ],
+      "expected": { "text": "Boundary", "error": "", "completed": true }
+    },
+    {
+      "id": "malformed-frame-is-ignored",
+      "chunks": [
+        "event: delta\ndata: {not json}\n\n",
+        "event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n",
+        "event: done\ndata: {\"ok\":true}\n\n"
+      ],
+      "expected": { "text": "Kumusta / hello", "error": "", "completed": true }
+    },
+    {
+      "id": "zero-count-result-is-not-a-receipt",
+      "chunks": [
+        "event: tool_result\ndata: {\"name\":\"create_todo\",\"count\":0}\n\n",
+        "event: done\ndata: {\"ok\":true}\n\n"
+      ],
+      "expected": { "text": "", "error": "", "completed": true, "receipts": {} }
+    },
+    {
+      "id": "unsuccessful-done-keeps-partial",
+      "chunks": [
+        "event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n",
+        "event: done\ndata: {\"ok\":false}\n\n"
+      ],
+      "expected": { "text": "Kumusta / hello", "completed": false, "errorPresent": true }
+    },
+    {
+      "id": "provider-error-after-partial",
+      "chunks": [
+        "event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n",
+        "event: error\ndata: {\"message\":\"Provider failed\"}\n\n"
+      ],
+      "expected": { "text": "Kumusta / hello", "completed": false, "errorContains": "Provider failed" }
+    },
+    {
+      "id": "premature-eof-keeps-partial",
+      "chunks": ["event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n"],
+      "expected": { "text": "Kumusta / hello", "completed": false, "errorPresent": true }
+    },
+    {
+      "id": "network-failure-reports-transport-error",
+      "chunks": ["event: delta\ndata: {\"delta\":\"Kumusta / hello\"}\n\n"],
+      "failure": "Connection reset",
+      "expected": { "text": "Kumusta / hello", "completed": false, "errorContains": "Connection reset" }
+    },
+    {
+      "id": "citation-becomes-a-source",
+      "chunks": [
+        "event: delta\ndata: {\"delta\":\"Fifteen days.\"}\n\n",
+        "event: citation\ndata: {\"type\":\"web\",\"index\":1,\"title\":\"Rule 70, Rules of Court\",\"url\":\"https://lawphil.net/rule-70\",\"domain\":\"lawphil.net\",\"excerpt\":\"Fifteen days.\"}\n\n",
+        "event: done\ndata: {\"ok\":true,\"web_citations\":1}\n\n"
+      ],
+      "expected": { "text": "Fifteen days.", "completed": true, "sourceUrls": ["https://lawphil.net/rule-70"] }
+    },
+    {
+      "id": "notice-is-deduplicated",
+      "chunks": [
+        "event: notice\ndata: {\"kind\":\"web_search\",\"message\":\"This answer says the web was checked, but no web search ran for it.\"}\n\n",
+        "event: notice\ndata: {\"kind\":\"web_search\",\"message\":\"This answer says the web was checked, but no web search ran for it.\"}\n\n",
+        "event: done\ndata: {\"ok\":true}\n\n"
+      ],
+      "expected": { "text": "", "completed": true, "noticeKinds": ["web_search"] }
+    },
+    {
+      "id": "intake-form-awaits-input",
+      "chunks": [
+        "event: tool_call\ndata: {\"name\":\"request_intake_form\",\"arguments\":{\"fields\":[{\"name\":\"recipient\",\"label\":\"Recipient\"}],\"default_values\":{\"sender\":\"Atty. Reyes\"}}}\n\n",
+        "event: done\ndata: {\"ok\":true}\n\n"
+      ],
+      "expected": { "completed": true, "awaitingIntake": true, "intakeFieldCount": 1 }
+    },
+    {
+      "id": "letter-draft-opens-the-editor",
+      "chunks": [
+        "event: tool_call\ndata: {\"name\":\"draft_letter\",\"arguments\":{}}\n\n",
+        "event: letter_draft\ndata: {\"title\":\"Demand Letter\",\"message_id\":\"msg-1\",\"content\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Demand\"}]}]}}\n\n",
+        "event: done\ndata: {\"ok\":true}\n\n"
+      ],
+      "expected": { "completed": true, "letterTitle": "Demand Letter" }
+    }
+  ]
+}

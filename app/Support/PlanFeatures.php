@@ -51,6 +51,9 @@ final class PlanFeatures
     /** Create an organization, invite members, and buy seats. */
     public const TEAMS = 'teams';
 
+    /** Track client profiles and move intake through pipeline stages. */
+    public const CRM = 'crm';
+
     /** Connect Google Drive and Microsoft SharePoint add-ons. */
     public const INTEGRATIONS = 'integrations';
 
@@ -118,6 +121,11 @@ final class PlanFeatures
             self::TEAMS => [
                 'label' => 'Team accounts',
                 'description' => 'Invite colleagues onto shared matters and buy seats as the team grows.',
+                'group' => self::GROUP_CAPABILITY,
+            ],
+            self::CRM => [
+                'label' => 'Client management (CRM)',
+                'description' => 'Track client profiles and move intake through configurable pipeline stages.',
                 'group' => self::GROUP_CAPABILITY,
             ],
             self::INTEGRATIONS => [
