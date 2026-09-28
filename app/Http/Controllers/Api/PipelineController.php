@@ -2,13 +2,17 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\CrmConflictException;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ProvisionPipelineRequest;
 use App\Http\Requests\StorePipelineRequest;
 use App\Http\Requests\UpdatePipelineRequest;
 use App\Http\Resources\PipelineResource;
+use App\Http\Resources\PipelineTemplateResource;
 use App\Models\Pipeline;
 use App\Services\Pipelines\PipelineService;
 use App\Support\CrmMutation;
+use App\Support\PipelineTemplate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -39,6 +43,11 @@ class PipelineController extends Controller
         return PipelineResource::collection($query->paginate($validated['per_page'] ?? 25));
     }
 
+    public function templates(): AnonymousResourceCollection
+    {
+        return PipelineTemplateResource::collection(PipelineTemplate::all());
+    }
+
     public function store(StorePipelineRequest $request): JsonResponse
     {
         CrmMutation::idempotencyKey($request);
@@ -49,6 +58,25 @@ class PipelineController extends Controller
             (new PipelineResource($pipeline))->response()->setStatusCode(201),
             $pipeline,
         );
+    }
+
+    public function provision(ProvisionPipelineRequest $request): JsonResponse
+    {
+        if (CrmMutation::idempotencyKey($request) === null) {
+            throw new CrmConflictException(
+                'idempotency_key_required',
+                'Idempotency-Key is required for pipeline provisioning.',
+                422,
+            );
+        }
+        $result = $this->pipelines->provision(
+            $request->user(),
+            $request->validated()['template_key'] ?? null,
+            $request->header('X-Request-Id'),
+        );
+        $response = (new PipelineResource($result['pipeline']))->response()->setStatusCode($result['created'] ? 201 : 200);
+
+        return CrmMutation::withEtag($response, $result['pipeline']);
     }
 
     public function show(Request $request, string $pipeline): JsonResponse

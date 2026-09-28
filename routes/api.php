@@ -301,6 +301,7 @@ Route::middleware(['auth:supabase', 'track_last_used', 'not_suspended'])->group(
             Route::delete('/cases/{case}/clients/{client}', [CaseClientController::class, 'detachFromCase']);
         });
 
+        Route::get('/pipeline-templates', [PipelineController::class, 'templates']);
         Route::get('/pipelines', [PipelineController::class, 'index']);
         Route::get('/pipelines/{pipeline}', [PipelineController::class, 'show']);
 
@@ -310,6 +311,8 @@ Route::middleware(['auth:supabase', 'track_last_used', 'not_suspended'])->group(
 
         Route::middleware('crm.idempotency')->group(function (): void {
             Route::post('/pipelines', [PipelineController::class, 'store']);
+            Route::post('/pipelines/provision', [PipelineController::class, 'provision'])
+                ->middleware('throttle:crm-mutation');
             Route::patch('/pipelines/{pipeline}', [PipelineController::class, 'update']);
             Route::delete('/pipelines/{pipeline}', [PipelineController::class, 'destroy']);
             Route::post('/pipelines/{pipeline}/restore', [PipelineController::class, 'restore']);
